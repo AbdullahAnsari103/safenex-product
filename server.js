@@ -175,9 +175,11 @@ app.use(errorHandler);
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 
-(async () => {
-    await initDB();
-    
+// Initialize DB schema asynchronously
+initDB().catch(err => console.error('[DB Init Error]', err));
+
+// Only spin up HTTP server if not running as a Vercel Serverless Function
+if (!process.env.VERCEL) {
     const serverInstance = server.listen(PORT, () => {
         console.log(`
 ╔════════════════════════════════════════╗
@@ -190,31 +192,24 @@ const PORT = process.env.PORT || 5000;
     `);
 
         // ─── 24-hour share link auto-expiry (runs every 10 min) ──────────
-        // Safety net: expire any links that have been active > 24h
-        // (in case the user never explicitly stopped tracking)
         const { expireStaleShareLinks } = require('./store/db');
         if (typeof expireStaleShareLinks === 'function') {
             setInterval(async () => {
                 try { await expireStaleShareLinks(); }
                 catch (e) { console.error('[AutoExpire]', e.message); }
-            }, 10 * 60 * 1000); // every 10 minutes
+            }, 10 * 60 * 1000);
         }
     });
 
-    // Handle port already in use error
     serverInstance.on('error', (error) => {
         if (error.code === 'EADDRINUSE') {
             console.error(`\n❌ Port ${PORT} is already in use!`);
-            console.log(`\n💡 Solutions:`);
-            console.log(`   1. Kill the process: taskkill /F /PID <PID>`);
-            console.log(`   2. Find PID: netstat -ano | findstr :${PORT}`);
-            console.log(`   3. Change PORT in .env file\n`);
             process.exit(1);
         } else {
             console.error('Server error:', error);
             process.exit(1);
         }
     });
-})();
+}
 
 module.exports = app;
