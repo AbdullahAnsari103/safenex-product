@@ -78,6 +78,18 @@ io.on('connection', (socket) => {
         console.log('👋 User left Silent Room:', socket.id);
     });
 
+    // Join Track Me admin room (admin dashboard only)
+    socket.on('join:trackme:admin', () => {
+        socket.join('trackme:admin');
+        console.log('📍 Admin joined Track Me room:', socket.id);
+    });
+
+    // Leave Track Me admin room
+    socket.on('leave:trackme:admin', () => {
+        socket.leave('trackme:admin');
+        console.log('📍 Admin left Track Me room:', socket.id);
+    });
+
     socket.on('disconnect', () => {
         console.log('👤 User disconnected:', socket.id);
     });
@@ -95,6 +107,8 @@ app.use('/api/activity', require('./routes/activity'));
 app.use('/api/silentroom', require('./routes/silentroom-new'));
 app.use('/api/safetrace', require('./routes/safetrace'));
 app.use('/api/admin', require('./routes/admin')); // Admin dashboard routes
+app.use('/api/trackme', require('./routes/trackme')); // Track Me live location routes (auth required)
+app.use('/api/tracking', require('./routes/tracking')); // Public live tracking API (no auth)
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
@@ -120,6 +134,17 @@ app.get('/sos', (req, res) => {
 // ─── Silent Room Page ─────────────────────────────────────────────────────────
 app.get('/silentroom', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'silentroom.html'));
+});
+
+// ─── Track Me Page ───────────────────────────────────────────────────────────
+app.get('/trackme', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'trackme.html'));
+});
+
+// ─── Public Live Tracker Viewer ────────────────────────────────────────────────
+// NO login required — emergency contacts open this after receiving a wa.me link
+app.get('/live/:token', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'live-viewer.html'));
 });
 
 // ─── SafeTrace Page ───────────────────────────────────────────────────────────
@@ -163,6 +188,17 @@ const PORT = process.env.PORT || 5000;
 ║   Real-time: Socket.IO ✅              ║
 ╚════════════════════════════════════════╝
     `);
+
+        // ─── 24-hour share link auto-expiry (runs every 10 min) ──────────
+        // Safety net: expire any links that have been active > 24h
+        // (in case the user never explicitly stopped tracking)
+        const { expireStaleShareLinks } = require('./store/db');
+        if (typeof expireStaleShareLinks === 'function') {
+            setInterval(async () => {
+                try { await expireStaleShareLinks(); }
+                catch (e) { console.error('[AutoExpire]', e.message); }
+            }, 10 * 60 * 1000); // every 10 minutes
+        }
     });
 
     // Handle port already in use error

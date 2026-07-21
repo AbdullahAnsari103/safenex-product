@@ -13,6 +13,7 @@ function fileToGenerativePart(filePath) {
         '.jpg': 'image/jpeg',
         '.jpeg': 'image/jpeg',
         '.png': 'image/png',
+        '.webp': 'image/webp',
         '.pdf': 'application/pdf',
     };
     const ext = path.extname(filePath).toLowerCase();
@@ -77,16 +78,17 @@ Do NOT return anything other than valid JSON. If the image is not a passport, se
 
 /**
  * Try to get a working Gemini model — attempts the configured model first,
- * then falls back through known working alternatives.
+ * then falls back through known working alternatives (including gemini-2.5-flash).
  */
 async function getWorkingModel(preferredModelName, imagePart, prompt) {
     // Models to try in order
     const modelsToTry = [
         preferredModelName,
+        'gemini-2.5-flash',
         'gemini-2.0-flash',
-        'gemini-1.5-flash',
         'gemini-1.5-flash-latest',
-    ].filter((v, i, a) => a.indexOf(v) === i); // deduplicate
+        'gemini-1.5-pro',
+    ].filter((v, i, a) => Boolean(v) && a.indexOf(v) === i); // deduplicate
 
     let lastError = null;
 
@@ -101,10 +103,7 @@ async function getWorkingModel(preferredModelName, imagePart, prompt) {
         } catch (err) {
             console.warn(`[Gemini] ❌ Model ${modelName} failed: ${err.message}`);
             lastError = err;
-            // Only continue trying if it's a model-not-found error
-            if (!err.message.includes('404') && !err.message.includes('not found') && !err.message.includes('not supported')) {
-                throw err; // Re-throw non-model errors (quota, auth, etc.)
-            }
+            // Continue trying other candidate models in sequence
         }
     }
 
@@ -119,7 +118,13 @@ async function getWorkingModel(preferredModelName, imagePart, prompt) {
  */
 async function verifyDocument(filePath, documentType) {
     try {
-        const modelName = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+        if (!process.env.GEMINI_API_KEY) {
+            const err = new Error('Gemini API key is not configured in .env file.');
+            err.statusCode = 500;
+            throw err;
+        }
+
+        const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
         const prompt = buildPrompt(documentType);
         const imagePart = fileToGenerativePart(filePath);
 
@@ -139,7 +144,7 @@ async function verifyDocument(filePath, documentType) {
             console.error('[Gemini] Failed to parse response:', rawText);
             return {
                 valid: false,
-                reason: 'AI returned an unreadable response. Please try uploading a clearer image.',
+                reason: 'AI returned an unreadable response format. Please try uploading a clearer image.',
                 details: null,
             };
         }
@@ -155,14 +160,25 @@ async function verifyDocument(filePath, documentType) {
     } catch (error) {
         console.error('[Gemini Verify Error]', error.message);
 
+        let statusCode = error.statusCode || 500;
+        let message = error.message;
+
         if (error.message && error.message.includes('API_KEY')) {
-            throw new Error('Gemini API key is invalid or missing.');
-        }
-        if (error.message && (error.message.includes('quota') || error.message.includes('429'))) {
-            throw new Error('Gemini API quota exceeded. Please try again later.');
+            statusCode = 401;
+            message = 'Gemini API key is invalid or missing.';
+        } else if (error.message && (error.message.includes('quota') || error.message.includes('429'))) {
+            statusCode = 429;
+            message = 'Gemini API quota exceeded. Please try again in a few moments.';
+        } else if (error.message && (error.message.includes('400') || error.message.includes('invalid argument'))) {
+            statusCode = 400;
+            message = 'The uploaded document image format or content could not be processed by AI. Please upload a clear JPG, PNG, or PDF file.';
+        } else {
+            message = `Document verification service error: ${error.message}`;
         }
 
-        throw new Error(`Document verification service error: ${error.message}`);
+        const customError = new Error(message);
+        customError.statusCode = statusCode;
+        throw customError;
     }
 }
 

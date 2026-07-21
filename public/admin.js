@@ -154,6 +154,9 @@ document.querySelectorAll('.nav-item').forEach(item => {
             case 'activity':
                 loadActivity();
                 break;
+            case 'live-tracking':
+                initLiveTracking();
+                break;
         }
     });
 });
@@ -1577,7 +1580,7 @@ async function loadSystemHealth() {
         
         try {
             const geminiStart = Date.now();
-            const geminiTest = await fetch('/api/sos/nexa-chat', {
+            const geminiTest = await fetch('/api/sos/chat', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1852,7 +1855,7 @@ async function loadSystemHealth() {
                         </svg>
                     </div>
                     <div class="health-info">
-                        <div class="health-title">Gemini AI Assistant</div>
+                        <div class="health-title">SafeNex AI Engine</div>
                         <div class="health-subtitle">Nexa AI & Route Analysis</div>
                     </div>
                     <div class="health-status health-status--${geminiStatus}">
@@ -2311,4 +2314,1081 @@ function filterCommunityPosts(filter) {
     // All posts are always shown, just sorted differently
     
     loadCommunityPosts();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  LIVE TRACKING COMMAND CENTER
+//  Admin-side Socket.IO + Leaflet integration
+// ═══════════════════════════════════════════════════════════
+
+let ltMap = null;
+let ltSocket = null;
+let ltInitialized = false;
+let ltActiveSessions = {}; // userId → { sessionId, userId, userName, marker, trail, heading, speed, ... }
+let ltCurrentTab = 'all';
+let ltShowTrails = true;
+let ltShowZones = true;
+let ltZoneCircles = [];
+let ltToastCount = 0;
+let ltSelectedUserId = null;
+let ltFocusedMode = false;
+let ltTileLayer = null;
+let ltMapDark = localStorage.getItem('admin_map_dark') === 'true';
+const LT_MAX_TRAIL_POINTS = 200;          // more history = smoother trail
+const LT_STALE_THRESHOLD_MS  = 2 * 60 * 1000;
+const LT_REMOVE_AFTER_STOP_MS = 10 * 1000;
+
+// ── Calculate bearing (degrees 0–360) between two lat/lng points ──
+function ltCalcBearing(lat1, lng1, lat2, lng2) {
+    const φ1 = lat1 * Math.PI / 180;
+    const φ2 = lat2 * Math.PI / 180;
+    const Δλ = (lng2 - lng1) * Math.PI / 180;
+    const y = Math.sin(Δλ) * Math.cos(φ2);
+    const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+// ── Convert bearing degrees to compass label ──
+function ltBearingToCompass(deg) {
+    const dirs = ['N','NE','E','SE','S','SW','W','NW'];
+    return dirs[Math.round(deg / 45) % 8];
+}
+
+// ── Format m/s to a readable speed string ──
+function ltFormatSpeed(mps) {
+    if (mps == null || isNaN(mps)) return null;
+    const kmh = mps * 3.6;
+    return kmh < 1 ? 'Stationary' : `${kmh.toFixed(1)} km/h`;
+}
+
+// ── STEP 2: Ramer-Douglas-Peucker path simplification algorithm ──
+// Removes GPS jitter and creates smooth professional trails
+function simplifyPath(points, tolerance) {
+    if (points.length <= 2) return points;
+    
+    function perpendicularDistance(point, lineStart, lineEnd) {
+        const dx = lineEnd.lat - lineStart.lat;
+        const dy = lineEnd.lng - lineStart.lng;
+        const mag = Math.sqrt(dx * dx + dy * dy);
+        if (mag === 0) return Math.sqrt(
+            Math.pow(point.lat - lineStart.lat, 2) + 
+            Math.pow(point.lng - lineStart.lng, 2)
+        );
+        const u = ((point.lat - lineStart.lat) * dx +
+                   (point.lng - lineStart.lng) * dy) / (mag * mag);
+        const closestLat = lineStart.lat + u * dx;
+        const closestLng = lineStart.lng + u * dy;
+        return Math.sqrt(
+            Math.pow(point.lat - closestLat, 2) + 
+            Math.pow(point.lng - closestLng, 2)
+        );
+    }
+    
+    function rdp(points, epsilon) {
+        let maxDist = 0;
+        let maxIndex = 0;
+        for (let i = 1; i < points.length - 1; i++) {
+            const dist = perpendicularDistance(
+                points[i], points[0], points[points.length - 1]
+            );
+            if (dist > maxDist) { maxDist = dist; maxIndex = i; }
+        }
+        if (maxDist > epsilon) {
+            const left = rdp(points.slice(0, maxIndex + 1), epsilon);
+            const right = rdp(points.slice(maxIndex), epsilon);
+            return left.slice(0, -1).concat(right);
+        }
+        return [points[0], points[points.length - 1]];
+    }
+    
+    return rdp(points, tolerance);
+}
+
+// ── Stale-pin staleness check runs every 30s ──
+function ltStartStalenessTimer() {
+    setInterval(() => {
+        const now = Date.now();
+        let changed = false;
+        Object.values(ltActiveSessions).forEach(s => {
+            const age = now - new Date(s.lastUpdate || s.startTime).getTime();
+            const staleNow = age > LT_STALE_THRESHOLD_MS;
+            if (staleNow !== !!s.isStale) {
+                s.isStale = staleNow;
+                // Update pin appearance
+                if (s.marker && ltMap) {
+                    s.marker.setIcon(ltBuildIcon(s.inDanger, s.userId === ltSelectedUserId, staleNow));
+                }
+                changed = true;
+            }
+        });
+        if (changed) ltRenderUserList();
+    }, 30 * 1000);
+}
+
+async function initLiveTracking() {
+    if (ltInitialized) {
+        // Already initialized — just refresh active sessions
+        await ltLoadActiveSessions();
+        return;
+    }
+    ltInitialized = true;
+
+    // Init Leaflet map
+    try {
+        ltMap = L.map('ltMap', {
+            zoomControl: true,
+            attributionControl: false,
+        }).setView([19.076, 72.8777], 12);
+
+        ltTileLayer = L.tileLayer(
+            ltMapDark
+              ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+              : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            { maxZoom: 19, attribution: '© OpenStreetMap contributors' }
+        ).addTo(ltMap);
+
+        // Sync toggle button label
+        const styleBtn = document.getElementById('ltMapStyleBtn');
+        if (styleBtn) styleBtn.textContent = ltMapDark ? '☀️ Light' : '🌙 Dark';
+
+        setTimeout(() => { ltMap.invalidateSize(); }, 300);
+    } catch (e) {
+        console.error('LT Map init error:', e);
+        return;
+    }
+
+    // Load danger zone circles overlay
+    await ltLoadDangerZoneCircles();
+
+    // Load existing active sessions
+    await ltLoadActiveSessions();
+
+    // Start staleness timer (dims pins when app is closed but session ACTIVE)
+    ltStartStalenessTimer();
+
+    // Connect Socket.IO
+    try {
+        if (!ltSocket || !ltSocket.connected) {
+            ltSocket = io();
+        }
+        ltSocket.emit('join:trackme:admin');
+
+        // New user started tracking
+        ltSocket.on('trackme:userStarted', (data) => {
+            ltAddSession(data);
+            ltUpdateCounters();
+            ltRenderUserList();
+        });
+
+        // Location update — restores stale pin to full brightness
+        ltSocket.on('trackme:locationUpdate', (data) => {
+            ltUpdatePinPosition(data);
+        });
+
+        // User EXPLICITLY stopped tracking — dim pin first, then remove after 10s
+        // This event only fires when user turns off the toggle on the Track Me page.
+        // Tab/browser close does NOT fire this anymore.
+        ltSocket.on('trackme:userStopped', (data) => {
+            ltMarkStopped(data);
+        });
+
+        // Danger zone alert
+        ltSocket.on('trackme:dangerZoneAlert', (data) => {
+            ltShowDangerZoneToast(data);
+        });
+    } catch (e) {
+        console.error('LT Socket.IO error:', e);
+    }
+}
+
+// ── Load active sessions from REST API ──
+async function ltLoadActiveSessions() {
+    try {
+        const res = await apiCall('/trackme/active');
+        const sessions = res.data || [];
+
+        sessions.forEach(s => {
+            if (!ltActiveSessions[s.sessionId]) {
+                ltAddSession(s);
+            }
+        });
+
+        ltUpdateCounters();
+        ltRenderUserList();
+        ltUpdateMapEmpty();
+    } catch (e) {
+        console.error('LT load sessions error:', e);
+    }
+}
+
+// ── Load danger zone circles ──
+async function ltLoadDangerZoneCircles() {
+    try {
+        const res = await apiCall('/trackme/danger-zones');
+        const zones = res.data || [];
+
+        ltZoneCircles.forEach(c => ltMap.removeLayer(c));
+        ltZoneCircles = [];
+
+        zones.forEach(z => {
+            if (!z.latitude || !z.longitude) return;
+            const color = z.riskLevel === 'Critical' ? '#EF4444' :
+                          z.riskLevel === 'High' ? '#F59E0B' :
+                          z.riskLevel === 'Medium' ? '#EAB308' : '#22C55E';
+            const circle = L.circle([z.latitude, z.longitude], {
+                radius: z.radius || 200,
+                color,
+                fillColor: color,
+                fillOpacity: 0.08,
+                weight: 1.5,
+                opacity: 0.5,
+            }).addTo(ltMap);
+
+            circle.bindPopup(`<b>${z.placeName}</b><br>${z.riskLevel} Risk`);
+            ltZoneCircles.push(circle);
+        });
+    } catch (e) {
+        console.error('LT load zones error:', e);
+    }
+}
+
+// ── Add or replace a session — keyed by userId (one entry per real user) ──
+function ltAddSession(data) {
+    if (!ltMap) return;
+    const userId = data.userId;
+    if (!userId) return;
+
+    // DEDUP: remove old map objects if this user already has an entry
+    const existing = ltActiveSessions[userId];
+    if (existing) {
+        if (existing.marker && ltMap.hasLayer(existing.marker)) ltMap.removeLayer(existing.marker);
+        if (existing.trail  && ltMap.hasLayer(existing.trail))  ltMap.removeLayer(existing.trail);
+        const oldRow = document.getElementById(`lt-row-${userId}`);
+        if (oldRow) oldRow.remove();
+    }
+
+    const coords = data.coordinates || [];
+    const last   = coords.length ? coords[coords.length - 1] : null;
+    const lat    = data.lastLat != null ? data.lastLat : (last ? last.lat : null);
+    const lng    = data.lastLng != null ? data.lastLng : (last ? last.lng : null);
+    const inDanger = !!data.inDanger || !!(last && last.inDanger);
+
+    // Seed heading from stored coordinates (last segment direction)
+    let seedHeading = null;
+    if (coords.length >= 2) {
+        const prev = coords[coords.length - 2];
+        const cur  = coords[coords.length - 1];
+        if (prev && cur) {
+            const dist = Math.hypot(cur.lat - prev.lat, cur.lng - prev.lng);
+            if (dist > 0.00005) seedHeading = ltCalcBearing(prev.lat, prev.lng, cur.lat, cur.lng);
+        }
+    }
+
+    let marker = null;
+    let trail  = null;
+
+    if (lat && lng) {
+        marker = L.marker([lat, lng], {
+            icon: ltBuildIcon(inDanger, false, false, seedHeading),
+            zIndexOffset: 1000,
+        }).addTo(ltMap).bindPopup(ltBuildPopup({ ...data, heading: seedHeading }));
+
+        if (coords.length > 1) {
+            const rawCoords = coords.map(c => ({ lat: c.lat, lng: c.lng }));
+            const simplified = simplifyPath(rawCoords, 0.00005);
+            trail = L.polyline(simplified.map(c => [c.lat, c.lng]), {
+                color: inDanger ? '#EF4444' : '#00FF88',
+                weight: 4,
+                opacity: 0.85,
+                smoothFactor: 1.5,
+                lineJoin: 'round',
+                lineCap: 'round'
+            });
+
+            if (ltShowTrails) trail.addTo(ltMap);
+        }
+    }
+
+    ltActiveSessions[userId] = {
+        ...data,
+        marker,
+        trail,
+        inDanger,
+        heading: seedHeading,
+        speed: data.speed ?? null,
+        lastUpdate: new Date()
+    };
+    ltUpdateMapEmpty();
+}
+
+// ── Helper: build directional arrow DivIcon for a user pin ──
+// Shows a navigation arrow pointing in the user's direction of travel.
+function ltBuildIcon(inDanger, selected, stale, heading) {
+    const safeColor   = '#00FF88';
+    const dangerColor = '#EF4444';
+    const staleColor  = '#F59E0B';
+    const color = stale ? staleColor : (inDanger ? dangerColor : safeColor);
+    const size  = selected ? 44 : 32;
+    const rot   = (heading != null && !isNaN(heading)) ? heading : 0;
+    const glowR = stale ? '245,158,11' : (inDanger ? '239,68,68' : '0,255,136');
+    const glowSize = selected ? 18 : 10;
+
+    return L.divIcon({
+        className: '',
+        html: `
+            <div style="
+                position: relative;
+                width: ${size}px;
+                height: ${size}px;
+                transform: rotate(${rot}deg);
+                transition: transform 0.4s cubic-bezier(0.25,0.46,0.45,0.94);
+                filter: drop-shadow(0 0 ${selected ? 8 : 4}px rgba(${glowR},${selected ? 0.9 : 0.6}));
+            ">
+                <svg viewBox="0 0 32 32" fill="none" width="${size}" height="${size}">
+                    <!-- Outer pulsing ring -->
+                    <circle cx="16" cy="16" r="14"
+                        fill="rgba(${glowR},0.12)"
+                        stroke="rgba(${glowR},0.35)"
+                        stroke-width="1.5"/>
+                    <!-- Arrow / chevron pointing up (north = 0°) -->
+                    <path d="M16 5 L22 24 L16 20 L10 24 Z"
+                        fill="${color}"
+                        stroke="rgba(255,255,255,0.9)"
+                        stroke-width="1.5"
+                        stroke-linejoin="round"/>
+                    <!-- Centre dot -->
+                    <circle cx="16" cy="16" r="2.5" fill="white" opacity="0.85"/>
+                </svg>
+            </div>
+            <style>
+                @keyframes ltPulse_${stale?'s':(inDanger?'d':'f')} {
+                    0%,100% { filter: drop-shadow(0 0 ${selected?8:4}px rgba(${glowR},${selected?0.9:0.5})); }
+                    50%     { filter: drop-shadow(0 0 ${selected?16:8}px rgba(${glowR},${selected?0.4:0.2})); }
+                }
+            </style>
+        `,
+        iconSize:   [size, size],
+        iconAnchor: [size / 2, size / 2],
+    });
+}
+
+// ── Mark session as explicitly stopped — dim pin + remove after 10s ──
+function ltMarkStopped(dataOrId) {
+    let uid = null;
+    if (typeof dataOrId === 'object' && dataOrId !== null) {
+        uid = dataOrId.userId ||
+            Object.keys(ltActiveSessions).find(k => ltActiveSessions[k].sessionId === dataOrId.sessionId);
+    } else {
+        uid = dataOrId;
+    }
+    const session = uid ? ltActiveSessions[uid] : null;
+    if (!session) return;
+
+    session.isStopped = true;
+    session.isStale   = true;
+
+    // Dim arrow immediately (heading preserved for final direction display)
+    if (session.marker && ltMap) {
+        session.marker.setIcon(ltBuildIcon(session.inDanger, false, true, session.heading));
+        session.marker.setOpacity(0.45);
+        session.marker.setPopupContent(`
+            <div style="font-size:13px">
+                <strong>${escapeHtml(session.userName || 'Unknown')}</strong><br>
+                <span style="color:#F59E0B">⛔ Tracking stopped</span>
+            </div>
+        `);
+    }
+
+    // Update card to show 'Stopped'
+    const rowEl = document.getElementById(`lt-row-${uid}`);
+    if (rowEl) {
+        const metaEl = rowEl.querySelector('.lt-user-meta');
+        if (metaEl) metaEl.innerHTML = '<span style="color:#EF4444">⛔ Tracking stopped</span>';
+    }
+
+    // Remove fully after short delay
+    setTimeout(() => {
+        ltRemoveSession(uid);
+        ltUpdateCounters();
+        ltRenderUserList();
+    }, LT_REMOVE_AFTER_STOP_MS);
+}
+
+
+// ── Update pin position on location update ──
+function ltUpdatePinPosition(data) {
+    // Derive heading from position delta when not sent by the socket
+    const { lat, lng, inDanger, pingCount } = data;
+    const sessionId  = data.sessionId;
+    const uid = data.userId ||
+        Object.keys(ltActiveSessions).find(k => ltActiveSessions[k].sessionId === sessionId);
+    const session = uid ? ltActiveSessions[uid] : null;
+    if (!session || !ltMap) return;
+
+    // Calculate heading from movement if socket doesn't supply it
+    let heading = data.heading != null ? data.heading : null;
+    if (heading == null && session.lastLat != null && session.lastLng != null) {
+        const dist = Math.hypot(lat - session.lastLat, lng - session.lastLng);
+        if (dist > 0.00005) { // ~5m threshold — ignore GPS noise
+            heading = ltCalcBearing(session.lastLat, session.lastLng, lat, lng);
+        } else {
+            heading = session.heading ?? null; // keep last heading while stationary
+        }
+    }
+
+    session.sessionId  = sessionId || session.sessionId;
+    session.lastLat    = lat;
+    session.lastLng    = lng;
+    session.inDanger   = inDanger;
+    session.pingCount  = pingCount;
+    session.lastUpdate = new Date();
+    session.isStale    = false;
+    session.heading    = heading;            // ← store latest heading
+    session.speed      = data.speed ?? null; // ← store speed if sent
+    if (!session.coordinates) session.coordinates = [];
+    session.coordinates.push({ lat, lng, ts: new Date().toISOString(), inDanger: !!inDanger });
+    if (session.coordinates.length > LT_MAX_TRAIL_POINTS) session.coordinates.shift();
+
+    // Update directional arrow — rotate to new heading, restore brightness if stale
+    const isSelected = (uid === ltSelectedUserId);
+    if (session.marker) {
+        session.marker.setIcon(ltBuildIcon(inDanger, isSelected, false, heading));
+        session.marker.setOpacity(1);
+        session.marker.setLatLng([lat, lng]);
+        session.marker.setPopupContent(ltBuildPopup(session));
+    }
+
+    // Extend trail
+    if (lat && lng) {
+        if (session.trail) {
+            const lls = session.trail.getLatLngs();
+            lls.push(L.latLng(lat, lng));
+            if (lls.length > LT_MAX_TRAIL_POINTS) lls.shift();
+            // Apply simplification every 20 points to keep trail smooth
+            const simplified = (lls.length % 20 === 0) 
+                ? simplifyPath(lls.map(ll => ({ lat: ll.lat, lng: ll.lng })), 0.00005)
+                : lls.map(ll => ({ lat: ll.lat, lng: ll.lng }));
+            session.trail.setLatLngs(simplified.map(c => [c.lat, c.lng]));
+            
+            // Update trail style based on danger status and selection
+            const trailWeight = (ltFocusedMode && isSelected) ? 4 : 3;
+            const trailOpacity = (ltFocusedMode && isSelected) ? 0.85 : 0.8;
+            session.trail.setStyle({
+                color: inDanger ? '#EF4444' : '#00FF88',
+                weight: trailWeight,
+                opacity: trailOpacity,
+                smoothFactor: 2,
+                lineJoin: 'round',
+                lineCap: 'round'
+            });
+            
+            // Show/hide trail based on ltShowTrails toggle and Focused Mode
+            if (ltShowTrails) {
+                // In Focused Mode: only show selected user's trail
+                // In Overview Mode: show all trails
+                if (ltFocusedMode) {
+                    if (isSelected) {
+                        if (!ltMap.hasLayer(session.trail)) {
+                            ltMap.addLayer(session.trail);
+                        }
+                    } else {
+                        if (ltMap.hasLayer(session.trail)) {
+                            ltMap.removeLayer(session.trail);
+                        }
+                    }
+                } else {
+                    // Overview Mode: show all trails
+                    if (!ltMap.hasLayer(session.trail)) {
+                        ltMap.addLayer(session.trail);
+                    }
+                }
+            } else {
+                // ltShowTrails is false: hide all trails
+                if (ltMap.hasLayer(session.trail)) {
+                    ltMap.removeLayer(session.trail);
+                }
+            }
+        } else if (session.marker) {
+            // Create new trail
+            const trailWeight = (ltFocusedMode && isSelected) ? 4 : 3;
+            const trailOpacity = (ltFocusedMode && isSelected) ? 0.85 : 0.8;
+            session.trail = L.polyline([[lat, lng]], {
+                color: inDanger ? '#EF4444' : '#00FF88',
+                weight: trailWeight,
+                opacity: trailOpacity,
+                smoothFactor: 2,
+                lineJoin: 'round',
+                lineCap: 'round'
+            });
+            
+            // Add to map if ltShowTrails is enabled
+            if (ltShowTrails) {
+                if (ltFocusedMode) {
+                    // Only add if this is the selected user
+                    if (isSelected) {
+                        session.trail.addTo(ltMap);
+                    }
+                } else {
+                    // Overview Mode: add all trails
+                    session.trail.addTo(ltMap);
+                }
+            }
+        }
+    }
+
+    // Surgical DOM update on this user's card only
+    const rowEl = document.getElementById(`lt-row-${uid}`);
+    if (rowEl) {
+        const metaEl = rowEl.querySelector('.lt-user-meta');
+        if (metaEl) {
+            const zoneText = inDanger ? ' · ⚠️ Danger' : '';
+            metaEl.textContent = `${pingCount} pings · just now${zoneText}`;
+        }
+        rowEl.classList.toggle('in-danger', !!inDanger);
+        rowEl.classList.remove('lt-user-row--stale');
+        const dot = rowEl.querySelector('.lt-user-dot');
+        if (dot) dot.className = `lt-user-dot lt-user-dot--${inDanger ? 'danger' : 'safe'}`;
+    }
+}
+
+// ── Remove session (accepts full data object or plain sessionId/userId string) ──
+function ltRemoveSession(dataOrId) {
+    let uid = null;
+    if (typeof dataOrId === 'object' && dataOrId !== null) {
+        uid = dataOrId.userId ||
+            Object.keys(ltActiveSessions).find(k => ltActiveSessions[k].sessionId === dataOrId.sessionId);
+    } else {
+        uid = ltActiveSessions[dataOrId] ? dataOrId :
+            Object.keys(ltActiveSessions).find(k => ltActiveSessions[k].sessionId === dataOrId);
+    }
+
+    const session = uid ? ltActiveSessions[uid] : null;
+    if (!session) return;
+
+    if (session.marker && ltMap && ltMap.hasLayer(session.marker)) ltMap.removeLayer(session.marker);
+    if (session.trail  && ltMap && ltMap.hasLayer(session.trail))  ltMap.removeLayer(session.trail);
+    if (session._historyLine      && ltMap && ltMap.hasLayer(session._historyLine))      ltMap.removeLayer(session._historyLine);
+    if (session._historyBackdrop  && ltMap && ltMap.hasLayer(session._historyBackdrop))  ltMap.removeLayer(session._historyBackdrop);
+    if (session._historyStartPin  && ltMap && ltMap.hasLayer(session._historyStartPin))  ltMap.removeLayer(session._historyStartPin);
+    if (session._historyEndPin    && ltMap && ltMap.hasLayer(session._historyEndPin))    ltMap.removeLayer(session._historyEndPin);
+
+    delete ltActiveSessions[uid];
+    if (ltSelectedUserId === uid) ltSelectedUserId = null;
+
+    ltUpdateMapEmpty();
+    ltRenderUserList();
+}
+
+
+// ── Render user list based on current tab + search + filter ──
+function ltRenderUserList() {
+    const listEl = document.getElementById('ltUserList');
+    const emptyEl = document.getElementById('ltListEmpty');
+    if (!listEl) return;
+
+    const search = (document.getElementById('ltSearch')?.value || '').toLowerCase();
+    const zoneFilter = document.getElementById('ltZoneFilter')?.value || '';
+
+    let sessions = Object.values(ltActiveSessions);
+
+    // Tab filter
+    if (ltCurrentTab === 'danger') {
+        sessions = sessions.filter(s => s.inDanger);
+    } else if (ltCurrentTab === 'stationary') {
+        // Stationary = stale (no update in > 2 min)
+        sessions = sessions.filter(s => !!s.isStale);
+    }
+
+    // Search filter
+    if (search) {
+        sessions = sessions.filter(s =>
+            (s.userName || '').toLowerCase().includes(search) ||
+            (s.safeNexId || '').toLowerCase().includes(search)
+        );
+    }
+
+    // Zone filter
+    if (zoneFilter === 'danger') sessions = sessions.filter(s => s.inDanger);
+    if (zoneFilter === 'safe') sessions = sessions.filter(s => !s.inDanger);
+
+    // Clear existing rows (not the empty state)
+    Array.from(listEl.children).forEach(c => {
+        if (!c.id || c.id !== 'ltListEmpty') c.remove();
+    });
+
+    if (sessions.length === 0) {
+        if (emptyEl) emptyEl.style.display = 'flex';
+        return;
+    }
+
+    if (emptyEl) emptyEl.style.display = 'none';
+
+    sessions.forEach(session => {
+        const uid = session.userId;
+        if (!uid) return;
+
+        // Surgical update if card already exists — just refresh classes
+        const existing = document.getElementById(`lt-row-${uid}`);
+        if (existing) {
+            existing.classList.toggle('in-danger', !!session.inDanger);
+            existing.classList.toggle('lt-user-row--selected', uid === ltSelectedUserId);
+            existing.classList.toggle('lt-user-row--stale', !!session.isStale && !session.isStopped);
+            return;
+        }
+
+        const row = document.createElement('div');
+        row.id        = `lt-row-${uid}`;
+        row.className = `lt-user-row${session.inDanger ? ' in-danger' : ''}${uid === ltSelectedUserId ? ' lt-user-row--selected' : ''}${session.isStale && !session.isStopped ? ' lt-user-row--stale' : ''}`;
+
+        const pingCount = session.pingCount || 0;
+        const lastUpdMs = session.lastUpdate ? new Date(session.lastUpdate).getTime() : null;
+        const staleLabel = session.isStale && lastUpdMs
+            ? `<span style="color:#F59E0B">📴 Last seen: ${ltFormatAgo(new Date(lastUpdMs))}</span>`
+            : `${pingCount} pings · ${ltFormatAgo(new Date(session.lastUpdate || session.startTime))}`;
+        const zoneText  = session.inDanger ? ' · ⚠️ Danger' : '';
+        // Direction badge
+        const compass = session.heading != null ? ltBearingToCompass(session.heading) : null;
+        const speedStr = ltFormatSpeed(session.speed);
+        const dirBadge = compass
+            ? `<span style="
+                display:inline-flex;align-items:center;gap:3px;
+                background:rgba(0,255,136,0.12);color:#00FF88;
+                border:1px solid rgba(0,255,136,0.25);
+                border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;
+                margin-left:4px;
+               ">${compass}${speedStr ? ` · ${speedStr}` : ''}</span>`
+            : '';
+
+        row.innerHTML = `
+            <span class="lt-user-dot lt-user-dot--${session.isStale ? 'stale' : (session.inDanger ? 'danger' : 'safe')}"></span>
+            <div class="lt-user-info">
+                <div class="lt-user-name">${escapeHtml(session.userName || 'Unknown')}${dirBadge}</div>
+                <div class="lt-user-meta">${staleLabel}${!session.isStale ? zoneText : ''}</div>
+            </div>
+            <div class="lt-user-actions">
+                <button class="lt-user-btn lt-user-btn--view"    onclick="ltViewOnMap('${uid}')">View</button>
+                <button class="lt-user-btn lt-user-btn--history" onclick="ltShowHistory('${uid}')">History</button>
+            </div>
+        `;
+
+        listEl.appendChild(row);
+    });
+}
+
+
+// ── Counter update ──
+function ltUpdateCounters() {
+    const sessions = Object.values(ltActiveSessions);
+    const total = sessions.length;
+    const danger = sessions.filter(s => s.inDanger).length;
+
+    const countEl = document.getElementById('ltLiveCount');
+    const badgeEl = document.getElementById('liveTrackingBadge');
+    const dangerEl = document.getElementById('ltDangerCount');
+    const dangerPill = document.getElementById('ltDangerPill');
+
+    if (countEl) countEl.textContent = total;
+    if (badgeEl) badgeEl.textContent = total;
+    if (dangerEl) dangerEl.textContent = danger;
+    if (dangerPill) dangerPill.style.display = danger > 0 ? 'flex' : 'none';
+}
+
+// ── Map empty state ──
+function ltUpdateMapEmpty() {
+    const empty = document.getElementById('ltMapEmpty');
+    if (!empty) return;
+    empty.style.display = Object.keys(ltActiveSessions).length === 0 ? 'flex' : 'none';
+}
+
+// ── Map controls ──
+function ltFitAll() {
+    if (!ltMap) return;
+    const markers = Object.values(ltActiveSessions)
+        .filter(s => s.marker)
+        .map(s => s.marker.getLatLng());
+
+    if (markers.length === 0) return;
+    if (markers.length === 1) { ltMap.setView(markers[0], 15, { animate: true }); return; }
+    ltMap.fitBounds(L.latLngBounds(markers), { padding: [40, 40], animate: true });
+}
+
+function ltToggleTrails() {
+    ltShowTrails = !ltShowTrails;
+    const btn = document.getElementById('ltToggleTrails');
+    if (btn) btn.classList.toggle('active', ltShowTrails);
+
+    Object.values(ltActiveSessions).forEach(s => {
+        if (s.trail && ltMap) {
+            ltShowTrails ? ltMap.addLayer(s.trail) : ltMap.removeLayer(s.trail);
+        }
+    });
+}
+
+function ltToggleMapStyle() {
+    if (!ltMap) return;
+    ltMapDark = !ltMapDark;
+    localStorage.setItem('admin_map_dark', ltMapDark);
+
+    if (ltTileLayer) ltMap.removeLayer(ltTileLayer);
+    ltTileLayer = L.tileLayer(
+        ltMapDark
+          ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+          : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        { maxZoom: 19, attribution: '© OpenStreetMap contributors' }
+    ).addTo(ltMap);
+
+    const styleBtn = document.getElementById('ltMapStyleBtn');
+    if (styleBtn) styleBtn.textContent = ltMapDark ? '☀️ Light' : '🌙 Dark';
+}
+
+
+function ltToggleZoneOverlays() {
+    ltShowZones = !ltShowZones;
+    const btn = document.getElementById('ltToggleZones');
+    if (btn) btn.classList.toggle('active', ltShowZones);
+
+    ltZoneCircles.forEach(c => {
+        ltShowZones ? ltMap.addLayer(c) : ltMap.removeLayer(c);
+    });
+}
+
+// ── Tab switching ──
+function ltSetTab(btn, tab) {
+    ltCurrentTab = tab;
+    document.querySelectorAll('.lt-tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    ltRenderUserList();
+}
+
+// ── Filter users (search/zone) ──
+function ltFilterUsers() {
+    // Clear existing user rows to re-render
+    const listEl = document.getElementById('ltUserList');
+    if (listEl) {
+        Array.from(listEl.children).forEach(c => {
+            if (c.id !== 'ltListEmpty') c.remove();
+        });
+    }
+    ltRenderUserList();
+}
+
+// ── ISSUE 2: View user on map — FOCUSED MODE implementation ──
+function ltViewOnMap(userId) {
+    const session = ltActiveSessions[userId];
+    if (!session || !ltMap) return;
+
+    // If clicking the same user again, return to Overview Mode
+    if (ltSelectedUserId === userId && ltFocusedMode) {
+        ltExitFocusedMode();
+        return;
+    }
+
+    // Enter Focused Mode
+    ltEnterFocusedMode(userId);
+}
+
+// ── Enter Focused Mode: Highlight selected user, show only their trail ──
+function ltEnterFocusedMode(userId) {
+    const session = ltActiveSessions[userId];
+    if (!session) return;
+
+    ltFocusedMode = true;
+    ltSelectedUserId = userId;
+
+    // Fade all other user arrows to 40% opacity
+    Object.entries(ltActiveSessions).forEach(([uid, s]) => {
+        if (uid !== userId && s.marker) {
+            s.marker.setOpacity(0.4);
+            s.marker.setIcon(ltBuildIcon(s.inDanger, false, s.isStale, s.heading));
+            // Hide their trails in Focused Mode
+            if (s.trail && ltMap.hasLayer(s.trail)) {
+                ltMap.removeLayer(s.trail);
+            }
+        }
+    });
+
+    // Brighten and enlarge the selected user's arrow
+    if (session.marker) {
+        session.marker.setOpacity(1);
+        session.marker.setIcon(ltBuildIcon(session.inDanger, true, false, session.heading));
+    }
+
+    // Show ONLY the selected user's trail (if ltShowTrails is enabled)
+    if (session.trail && ltShowTrails) {
+        if (!ltMap.hasLayer(session.trail)) {
+            ltMap.addLayer(session.trail);
+        }
+        session.trail.setStyle({
+            weight: 4,
+            opacity: 0.85,
+            color: session.inDanger ? '#EF4444' : '#00FF88',
+            smoothFactor: 2,
+            lineJoin: 'round',
+            lineCap: 'round'
+        });
+    }
+
+    // Highlight card with glowing border
+    document.querySelectorAll('.lt-user-row').forEach(row => {
+        row.classList.remove('lt-user-row--selected');
+    });
+    const rowEl = document.getElementById(`lt-row-${userId}`);
+    if (rowEl) {
+        rowEl.classList.add('lt-user-row--selected');
+        rowEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    // Fly map to this user — slightly offset downward to show trail behind
+    if (session.marker) {
+        ltMap.flyTo(session.marker.getLatLng(), 17, { animate: true, duration: 0.9 });
+
+        // Rich popup with direction and speed data
+        const heading = session.heading;
+        const compass = heading != null ? ltBearingToCompass(heading) : null;
+        const speedStr = ltFormatSpeed(session.speed);
+        const lat   = session.lastLat  != null ? parseFloat(session.lastLat).toFixed(5)  : '—';
+        const lng   = session.lastLng  != null ? parseFloat(session.lastLng).toFixed(5) : '—';
+        const ago   = session.lastUpdate ? ltFormatAgo(new Date(session.lastUpdate)) : '—';
+        const zone  = session.inDanger
+            ? '<span style="color:#EF4444;font-weight:700">\u26a0\ufe0f Danger Zone</span>'
+            : '<span style="color:#10B981">\u2705 Safe Zone</span>';
+
+        session.marker.setPopupContent(`
+            <div style="font-size:13px;min-width:200px;line-height:1.8;font-family:Inter,sans-serif">
+                <strong style="font-size:15px;color:#fff">${escapeHtml(session.userName || 'Unknown')}</strong>
+                ${session.safeNexId ? `<br><span style="color:#94A3B8;font-size:11px">ID: ${session.safeNexId}</span>` : ''}
+                <hr style="border:none;border-top:1px solid rgba(255,255,255,0.12);margin:8px 0">
+                📍 <b>Coords:</b> ${lat}, ${lng}<br>
+                ${compass != null ? `🧭 <b>Direction:</b> ${compass} (${Math.round(heading)}°)<br>` : ''}
+                ${speedStr ? `⚡ <b>Speed:</b> ${speedStr}<br>` : ''}
+                🕐 <b>Updated:</b> ${ago}<br>
+                📡 <b>Pings:</b> ${session.pingCount || 0}<br>
+                ${zone}
+            </div>
+        `);
+        session.marker.openPopup();
+    }
+
+    // Show "Back to Overview" button
+    ltShowBackButton();
+}
+
+// ── Exit Focused Mode: Return to Overview Mode ──
+function ltExitFocusedMode() {
+    ltFocusedMode = false;
+    ltSelectedUserId = null;
+
+    // Restore all arrows to full opacity and normal size
+    Object.values(ltActiveSessions).forEach(s => {
+        if (s.marker) {
+            s.marker.setOpacity(1);
+            s.marker.setIcon(ltBuildIcon(s.inDanger, false, s.isStale, s.heading));
+        }
+        // In Overview Mode: show all trails if ltShowTrails is enabled
+        if (s.trail && ltShowTrails) {
+            if (!ltMap.hasLayer(s.trail)) {
+                ltMap.addLayer(s.trail);
+            }
+            // Reset trail style to normal weight
+            s.trail.setStyle({
+                weight: 3,
+                opacity: 0.8,
+                color: s.inDanger ? '#EF4444' : '#00FF88',
+                smoothFactor: 2,
+                lineJoin: 'round',
+                lineCap: 'round'
+            });
+        }
+    });
+
+    // Remove card highlights
+    document.querySelectorAll('.lt-user-row').forEach(row => {
+        row.classList.remove('lt-user-row--selected');
+    });
+
+    // Zoom out to show all users
+    ltFitAll();
+
+    // Hide "Back to Overview" button
+    ltHideBackButton();
+}
+
+// ── Show/Hide "Back to Overview" button ──
+function ltShowBackButton() {
+    let backBtn = document.getElementById('ltBackToOverview');
+    if (!backBtn) {
+        backBtn = document.createElement('button');
+        backBtn.id = 'ltBackToOverview';
+        backBtn.className = 'lt-back-btn';
+        backBtn.innerHTML = '← Back to Overview';
+        backBtn.onclick = ltExitFocusedMode;
+        document.getElementById('ltMap').appendChild(backBtn);
+    }
+    backBtn.style.display = 'block';
+}
+
+function ltHideBackButton() {
+    const backBtn = document.getElementById('ltBackToOverview');
+    if (backBtn) {
+        backBtn.style.display = 'none';
+    }
+}
+
+
+// ── ISSUE 3: History — draw full session route on MAIN MAP (toggle on/off) ──
+function ltShowHistory(userId) {
+    const session = ltActiveSessions[userId];
+    if (!session || !ltMap) return;
+
+    const btn = document.querySelector(`#lt-row-${userId} .lt-user-btn--history`);
+
+    // Toggle: if route already visible, clear it
+    if (session._historyLine && ltMap.hasLayer(session._historyLine)) {
+        ltMap.removeLayer(session._historyLine);
+        session._historyLine = null;
+        if (session._historyBackdrop && ltMap.hasLayer(session._historyBackdrop)) {
+            ltMap.removeLayer(session._historyBackdrop);
+            session._historyBackdrop = null;
+        }
+        if (session._historyStartPin && ltMap.hasLayer(session._historyStartPin)) {
+            ltMap.removeLayer(session._historyStartPin);
+            session._historyStartPin = null;
+        }
+        if (session._historyEndPin && ltMap.hasLayer(session._historyEndPin)) {
+            ltMap.removeLayer(session._historyEndPin);
+            session._historyEndPin = null;
+        }
+        if (btn) btn.textContent = 'History';
+        return;
+    }
+
+    const coords = session.coordinates || [];
+    if (coords.length === 0) {
+        if (session.marker) ltMap.flyTo(session.marker.getLatLng(), 15, { animate: true, duration: 0.6 });
+        return;
+    }
+
+    const routeColor = session.inDanger ? '#FBBF24' : '#38BDF8';
+
+    // Apply simplification to history trail for smooth professional appearance
+    const simplified = simplifyPath(coords.map(c => ({ lat: c.lat, lng: c.lng })), 0.00005);
+    const lls = simplified.map(c => [c.lat, c.lng]);
+
+    // Draw semi-transparent backdrop (wider, dimmer) for depth effect
+    session._historyBackdrop = L.polyline(lls, {
+        color: routeColor,
+        weight: 8,
+        opacity: 0.18,
+        smoothFactor: 1.5,
+        lineJoin: 'round',
+        lineCap: 'round'
+    }).addTo(ltMap);
+
+    // Main dashed history polyline on top
+    session._historyLine = L.polyline(lls, {
+        color: routeColor,
+        weight: 3.5,
+        opacity: 0.95,
+        dashArray: '8 5',
+        smoothFactor: 1.5,
+        lineJoin: 'round',
+        lineCap: 'round'
+    }).addTo(ltMap);
+
+    // Start pin — green dot
+    session._historyStartPin = L.marker(lls[0], {
+        icon: L.divIcon({
+            className: '',
+            html: '<div style="width:14px;height:14px;background:#10B981;border:2.5px solid #fff;border-radius:50%;box-shadow:0 0 12px #10B981"></div>',
+            iconSize: [14, 14], iconAnchor: [7, 7],
+        }),
+        zIndexOffset: 900,
+    }).addTo(ltMap).bindPopup(`🟢 Session Start — ${escapeHtml(session.userName || 'User')}`);
+
+    // End pin (current position) — flashing amber flag
+    const endLL = lls[lls.length - 1];
+    session._historyEndPin = L.marker(endLL, {
+        icon: L.divIcon({
+            className: '',
+            html: '<div style="width:14px;height:14px;background:#F59E0B;border:2.5px solid #fff;border-radius:50%;box-shadow:0 0 12px #F59E0B"></div>',
+            iconSize: [14, 14], iconAnchor: [7, 7],
+        }),
+        zIndexOffset: 900,
+    }).addTo(ltMap).bindPopup(`📍 Last Known Position — ${escapeHtml(session.userName || 'User')}`);
+
+    // Fit map to full route with padding
+    ltMap.fitBounds(L.latLngBounds(lls), { padding: [50, 50], animate: true, maxZoom: 17 });
+
+    if (btn) btn.textContent = 'Clear';
+}
+
+// ── Danger zone alert toast ──
+function ltShowDangerZoneToast(data) {
+    const container = document.getElementById('ltToastContainer');
+    if (!container) return;
+
+    ltToastCount++;
+    const toastId = `lt-toast-${ltToastCount}`;
+
+    const toast = document.createElement('div');
+    toast.className = 'lt-toast';
+    toast.id = toastId;
+    toast.innerHTML = `
+        <div class="lt-toast-title">⚠️ Danger Zone Alert</div>
+        <div class="lt-toast-body">
+            <strong>${escapeHtml(data.userName || 'A user')}</strong> has entered a danger zone.
+            ${data.dangerZoneName ? `<br>Zone: ${escapeHtml(data.dangerZoneName)}` : ''}
+        </div>
+        <div class="lt-toast-actions">
+            <button class="lt-toast-btn lt-toast-btn--view" onclick="ltViewOnMap('${data.sessionId}'); this.closest('.lt-toast').remove();">View on Map</button>
+            <button class="lt-toast-btn lt-toast-btn--dismiss" onclick="this.closest('.lt-toast').remove()">Dismiss</button>
+        </div>
+    `;
+
+    container.appendChild(toast);
+
+    // Auto-dismiss after 10s
+    setTimeout(() => {
+        if (document.getElementById(toastId)) {
+            document.getElementById(toastId).remove();
+        }
+    }, 10000);
+}
+
+// ── Popup HTML builder — enriched with speed, heading, and pings ──
+function ltBuildPopup(data) {
+    const lat = data.lastLat != null ? parseFloat(data.lastLat).toFixed(5) : '—';
+    const lng = data.lastLng != null ? parseFloat(data.lastLng).toFixed(5) : '—';
+    const heading = data.heading != null ? data.heading : null;
+    const compass = heading != null ? ltBearingToCompass(heading) : null;
+    const speedStr = ltFormatSpeed(data.speed);
+    const dangerLabel = data.inDanger
+        ? '<span style="color:#EF4444;font-weight:700">⚠️ Danger Zone</span>'
+        : '<span style="color:#10B981">✅ Safe Zone</span>';
+
+    return `
+        <div style="font-size:13px;min-width:190px;line-height:1.75;font-family:Inter,sans-serif">
+            <strong style="font-size:14px;color:#fff">${escapeHtml(data.userName || 'Unknown')}</strong>
+            ${data.safeNexId ? `<br><span style="color:#94A3B8;font-size:11px">ID: ${data.safeNexId}</span>` : ''}
+            <hr style="border:none;border-top:1px solid rgba(255,255,255,0.12);margin:7px 0">
+            📍 <b>Location:</b> ${lat}, ${lng}<br>
+            ${compass != null ? `🧭 <b>Direction:</b> ${compass} (${Math.round(heading)}°)<br>` : ''}
+            ${speedStr ? `⚡ <b>Speed:</b> ${speedStr}<br>` : ''}
+            📡 <b>Pings:</b> ${data.pingCount || 0}<br>
+            ${dangerLabel}
+        </div>
+    `;
+}
+
+// ── Helpers ──
+function ltFormatAgo(date) {
+    const s = Math.floor((Date.now() - date.getTime()) / 1000);
+    if (s < 60) return `${s}s ago`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    return `${Math.floor(s / 3600)}h ago`;
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }

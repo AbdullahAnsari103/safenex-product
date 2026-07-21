@@ -1,5 +1,6 @@
 /**
  * SafeTrace Frontend - Production-Ready Risk-Aware Navigation
+ * Optimized for performance and user experience
  */
 
 // Configuration
@@ -7,6 +8,9 @@ const API_BASE = '/api/safetrace';
 const UPDATE_INTERVAL = 10000; // 10 seconds for location updates
 const DEVIATION_THRESHOLD = 50; // 50 meters
 const MAX_ROUTE_DISTANCE_KM = 150; // OpenRouteService limit for walking routes
+const DEBOUNCE_DELAY = 300; // ms for input debouncing
+const CACHE_DURATION = 2 * 60 * 1000; // 2 minutes cache for geocoding (reduced from 5)
+const AUTOCOMPLETE_CACHE_DURATION = 30 * 1000; // 30 seconds for autocomplete
 
 // State
 let map = null;
@@ -19,13 +23,20 @@ let selectedRoute = null;
 let routeLayer = null;
 let dangerZoneLayer = null;
 let isNavigating = false;
-let updateTimer = null;
-let autocompleteTimeout = null;
+// ✅ BUG 15 FIX: Removed unused updateTimer (never assigned anywhere)
+// ✅ BUG 14 FIX: Removed unused autocompleteTimeout (local variable used instead)
 let usingGPS = false;
 let manualStartLocation = null;
 let mapTheme = 'bright'; // Default theme
 let tileLayer = null; // Store tile layer reference
 let travelMode = 'foot-walking'; // Default travel mode
+let sharedAudioContext = null; // ✅ BUG 11 FIX: Reuse single AudioContext across all alerts
+
+// Performance optimization: Cache for geocoding results
+const geocodeCache = new Map();
+
+// Performance optimization: Request deduplication
+const pendingRequests = new Map();
 
 // Get auth token
 function getToken() {
@@ -33,7 +44,7 @@ function getToken() {
     return localStorage.getItem('snx_token') || localStorage.getItem('token');
 }
 
-// API Helper
+// API Helper with request deduplication and caching
 async function apiCall(endpoint, options = {}) {
     const token = getToken();
     if (!token) {
@@ -41,40 +52,81 @@ async function apiCall(endpoint, options = {}) {
         throw new Error('Authentication required');
     }
 
-    try {
-        const response = await fetch(`${API_BASE}${endpoint}`, {
-            ...options,
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
-                ...options.headers
-            }
-        });
-
-        let data;
-        try {
-            data = await response.json();
-        } catch (parseError) {
-            console.error('Failed to parse response:', parseError);
-            throw new Error('Invalid response from server');
+    // Create cache key for GET requests
+    const cacheKey = options.method === 'GET' || !options.method ? endpoint : null;
+    
+    // Use shorter cache for autocomplete
+    const cacheDuration = endpoint.includes('/autocomplete') ? AUTOCOMPLETE_CACHE_DURATION : CACHE_DURATION;
+    
+    // Check cache for GET requests
+    if (cacheKey && geocodeCache.has(cacheKey)) {
+        const cached = geocodeCache.get(cacheKey);
+        if (Date.now() - cached.timestamp < cacheDuration) {
+            console.log('Using cached response for:', endpoint);
+            return cached.data;
         }
-
-        if (!response.ok) {
-            // If unauthorized, redirect to login
-            if (response.status === 401 || response.status === 403) {
-                console.error('Authentication failed, redirecting to login');
-                setTimeout(() => {
-                    window.location.href = '/onboarding.html';
-                }, 1000);
-            }
-            throw new Error(data?.message || data?.error || 'Request failed');
-        }
-
-        return data;
-    } catch (error) {
-        console.error('API call error:', error);
-        throw error;
+        geocodeCache.delete(cacheKey);
     }
+
+    // Request deduplication: prevent duplicate simultaneous requests
+    const requestKey = `${endpoint}-${options.body || ''}`; // ✅ BUG 8 FIX: body is already JSON string
+    if (pendingRequests.has(requestKey)) {
+        console.log('Reusing pending request for:', endpoint);
+        return pendingRequests.get(requestKey);
+    }
+
+    const requestPromise = (async () => {
+        try {
+            const response = await fetch(`${API_BASE}${endpoint}`, {
+                ...options,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                    ...options.headers
+                }
+            });
+
+            let data;
+            try {
+                data = await response.json();
+            } catch (parseError) {
+                console.error('Failed to parse response:', parseError);
+                throw new Error('Invalid response from server');
+            }
+
+            if (!response.ok) {
+                // If unauthorized, redirect to login
+                if (response.status === 401 || response.status === 403) {
+                    console.error('Authentication failed, redirecting to login');
+                    setTimeout(() => {
+                        window.location.href = '/onboarding.html';
+                    }, 1000);
+                }
+                throw new Error(data?.message || data?.error || 'Request failed');
+            }
+
+            // Cache GET requests
+            if (cacheKey) {
+                geocodeCache.set(cacheKey, {
+                    data: data,
+                    timestamp: Date.now()
+                });
+            }
+
+            return data;
+        } catch (error) {
+            console.error('API call error:', error);
+            throw error;
+        } finally {
+            // Remove from pending requests
+            pendingRequests.delete(requestKey);
+        }
+    })();
+
+    // Store pending request
+    pendingRequests.set(requestKey, requestPromise);
+    
+    return requestPromise;
 }
 
 // Initialize Map
@@ -178,7 +230,7 @@ function toggleMapTheme(theme) {
     showNotification(`Map theme changed to ${theme}`, 'success');
 }
 
-// Start Location Tracking
+// Start Location Tracking with Progressive Enhancement
 function startLocationTracking() {
     if (!navigator.geolocation) {
         showNotification('Geolocation is not supported by your browser', 'error');
@@ -188,38 +240,87 @@ function startLocationTracking() {
 
     updateLocationStatus('Getting your location...', 'info');
 
-    // Get initial position with longer timeout
+    // ✅ BUG 2 FIX: Shared flag across all location attempts (not just fast path)
+    let locationAcquired = false;
+
+    const onSuccess = (position) => {
+        if (locationAcquired) return; // ✅ Guard covers ALL paths
+        locationAcquired = true;
+        updateUserLocation(position);
+        updateLocationStatus('GPS location active', 'success');
+        console.log('Location acquired:', position.coords.accuracy, 'meters accuracy');
+        startHighAccuracyWatch();
+    };
+
+    const onError = (error) => {
+        if (locationAcquired) return;
+        console.warn('Location attempt failed:', error);
+        // Only show error if all attempts have failed
+        handleGeolocationError(error);
+    };
+
+    // Step 1: Try fast cached location
     navigator.geolocation.getCurrentPosition(
-        (position) => {
-            updateUserLocation(position);
-            updateLocationStatus('GPS location active', 'success');
-        },
+        onSuccess,
         (error) => {
-            console.error('Geolocation error:', error);
-            handleGeolocationError(error);
+            if (locationAcquired) return;
+            console.warn('Quick location failed, trying high accuracy...', error);
+            // Step 2: Try high accuracy
+            navigator.geolocation.getCurrentPosition(
+                onSuccess,
+                onError,
+                {
+                    enableHighAccuracy: true,
+                    timeout: 15000,
+                    maximumAge: 5000
+                }
+            );
         },
         {
-            enableHighAccuracy: true,
-            timeout: 30000, // Increased to 30 seconds
-            maximumAge: 0
+            enableHighAccuracy: false,
+            timeout: 5000,
+            maximumAge: 30000
         }
     );
+}
 
-    // Watch position with controlled updates
+// Start High Accuracy Watch (for continuous tracking)
+function startHighAccuracyWatch() {
+    // Clear existing watch if any
+    if (watchId) {
+        navigator.geolocation.clearWatch(watchId);
+    }
+
+    console.log('[GPS] Starting continuous location tracking...');
+
+    // Watch position with optimized settings for real-time tracking
     watchId = navigator.geolocation.watchPosition(
         (position) => {
             updateUserLocation(position);
+            // Log significant updates
+            if (position.coords.accuracy < 50) {
+                console.log('[GPS] High accuracy update:', Math.round(position.coords.accuracy), 'meters');
+            }
         },
         (error) => {
-            console.error('Geolocation watch error:', error);
-            // Don't show error for watch position, just log it
+            console.warn('[GPS] Watch error:', error.message);
+            // ✅ BUG 3 FIX: watchPosition error does NOT auto-clear the watch
+            // Must clear it before restart or watchId check will always be truthy
+            navigator.geolocation.clearWatch(watchId);
+            watchId = null;
+            setTimeout(() => {
+                console.log('[GPS] Restarting watch after error...');
+                startHighAccuracyWatch();
+            }, 5000);
         },
         {
             enableHighAccuracy: true,
-            timeout: 30000, // Increased to 30 seconds
-            maximumAge: 10000 // Allow 10 second old positions
+            timeout: 15000, // Reduced from 20s for faster updates
+            maximumAge: 5000 // Reduced from 10s for fresher positions
         }
     );
+    
+    console.log('[GPS] Watch started with ID:', watchId);
 }
 
 // Handle Geolocation Errors
@@ -257,7 +358,7 @@ function updateLocationStatus(message, type = 'info') {
     }
 }
 
-// Use My Location Button Handler
+// Use My Location Button Handler with Progressive Enhancement
 function useMyLocation() {
     const btn = document.getElementById('useLocationBtn');
     const startInput = document.getElementById('startInput');
@@ -275,62 +376,103 @@ function useMyLocation() {
     startInput.value = 'Getting location...';
     startInput.disabled = true;
 
+    let locationAcquired = false;
+
+    // Success handler
+    const handleLocationSuccess = (position) => {
+        if (locationAcquired) return; // Prevent duplicate handling
+        locationAcquired = true;
+
+        const { latitude, longitude, heading, accuracy } = position.coords;
+        currentPosition = { latitude, longitude };
+        usingGPS = true;
+        manualStartLocation = null;
+        
+        // Store heading if available
+        if (heading !== null && heading !== undefined) {
+            currentHeading = heading;
+        }
+
+        // Update input
+        startInput.value = `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
+        startInput.disabled = false;
+        
+        // Update marker with directional arrow
+        if (!userMarker) {
+            createDirectionalMarker(latitude, longitude, heading, accuracy);
+            map.setView([latitude, longitude], 15);
+        } else {
+            updateDirectionalMarker(latitude, longitude, heading, accuracy);
+            map.setView([latitude, longitude], 15);
+        }
+
+        // Remove loading state
+        btn.classList.remove('loading');
+        btn.disabled = false;
+        updateLocationStatus('GPS location active', 'success');
+        showNotification('Location acquired successfully', 'success');
+
+        // Start watching position if not already watching
+        if (!watchId) {
+            startHighAccuracyWatch();
+        }
+    };
+
+    // Error handler
+    const handleLocationError = (error) => {
+        if (locationAcquired) return; // Already got location
+        
+        console.error('Geolocation error:', error);
+        btn.classList.remove('loading');
+        btn.disabled = false;
+        startInput.value = '';
+        startInput.disabled = false;
+        handleGeolocationError(error);
+    };
+
+    // ✅ BUG 10 FIX: Single attempt — clean, no concurrent requests, no battery drain
+    const fallbackTimer = setTimeout(() => {
+        if (!locationAcquired) {
+            handleLocationError({ code: 3, message: 'Location timeout' });
+        }
+    }, 12000);
+
+    const originalSuccess = handleLocationSuccess;
+    const wrappedSuccess = (position) => {
+        clearTimeout(fallbackTimer);
+        originalSuccess(position);
+    };
+
     navigator.geolocation.getCurrentPosition(
-        (position) => {
-            const { latitude, longitude, heading, accuracy } = position.coords;
-            currentPosition = { latitude, longitude };
-            usingGPS = true;
-            manualStartLocation = null;
-            
-            // Store heading if available
-            if (heading !== null && heading !== undefined) {
-                currentHeading = heading;
-            }
-
-            // Update input
-            startInput.value = `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
-            startInput.disabled = false;
-            
-            // Update marker with directional arrow
-            if (!userMarker) {
-                createDirectionalMarker(latitude, longitude, heading, accuracy);
-                map.setView([latitude, longitude], 15);
-            } else {
-                updateDirectionalMarker(latitude, longitude, heading, accuracy);
-                map.setView([latitude, longitude], 15);
-            }
-
-            // Remove loading state
-            btn.classList.remove('loading');
-            btn.disabled = false;
-            updateLocationStatus('GPS location active', 'success');
-            showNotification('Location acquired successfully', 'success');
-
-            // Start watching position
-            if (!watchId) {
-                startLocationTracking();
-            }
-        },
+        wrappedSuccess,
         (error) => {
-            console.error('Geolocation error:', error);
-            btn.classList.remove('loading');
-            btn.disabled = false;
-            startInput.value = '';
-            startInput.disabled = false;
-            handleGeolocationError(error);
+            clearTimeout(fallbackTimer);
+            handleLocationError(error);
         },
         {
             enableHighAccuracy: true,
-            timeout: 30000, // Increased to 30 seconds
-            maximumAge: 0
+            timeout: 12000,
+            maximumAge: 10000
         }
     );
 }
 
 // Update User Location
+let activeRouteLine = null;
+let lastTrimIndex = 0;
+let travelledLine = null;
 function updateUserLocation(position) {
     const { latitude, longitude, heading, accuracy } = position.coords;
     currentPosition = { latitude, longitude };
+    updateProximityLocation(latitude, longitude); // ✅ BUG 2 FIX: Feed GPS into proximity detection
+    
+    console.log('[Location Update]', {
+        lat: latitude.toFixed(6),
+        lng: longitude.toFixed(6),
+        accuracy: Math.round(accuracy) + 'm',
+        heading: heading,
+        isNavigating: isNavigating
+    });
     
     // Update heading if available (from device compass)
     if (heading !== null && heading !== undefined) {
@@ -346,30 +488,67 @@ function updateUserLocation(position) {
     if (!userMarker) {
         createDirectionalMarker(latitude, longitude, currentHeading, accuracy);
         
-        // Only center map if using GPS
-        if (usingGPS) {
+        // Center map on user location
+        if (map) {
             map.setView([latitude, longitude], 15);
         }
     } else {
         updateDirectionalMarker(latitude, longitude, currentHeading, accuracy);
+        
+        // ✅ BUG 3 FIX: Offset user to lower third during navigation (Google Maps style)
+        // panTo does NOT support offset — must use project/unproject to shift target point
+        if (isNavigating) {
+            const mapHeight = map.getSize().y;
+            const offsetPixels = mapHeight * 0.25; // Push center up 25% so user is in lower third
+            const currentZoom = map.getZoom();
+            const targetPoint = map.project([latitude, longitude], currentZoom).subtract([0, offsetPixels]);
+            const offsetLatLng = map.unproject(targetPoint, currentZoom);
+            map.panTo(offsetLatLng, {
+                animate: true,
+                duration: 0.5,
+                easeLinearity: 0.5
+            });
+        }
+    }
+
+    // ✅ BUG 10 FIX: Only check arrival when GPS is accurate enough to be reliable
+    if (isNavigating && selectedRoute && accuracy <= 30) {
+        checkArrival(latitude, longitude);
+    }
+
+    // ✅ BUG B FIX: Client-side route trimming
+    if (isNavigating && selectedRoute && accuracy <= 50) {
+        trimRouteFromBehind(latitude, longitude);
     }
 
     // Check for deviation if navigating
     if (isNavigating && selectedRoute) {
-        checkDeviation();
+        throttledCheckDeviation(); // ✅ BUG 4 FIX: Throttled — not every GPS tick
     }
 }
 
 // Create Directional Marker with Arrow
 function createDirectionalMarker(lat, lng, heading, accuracy) {
     const rotation = heading !== null && heading !== undefined ? heading : 0;
+    previousPosition = { lat, lng }; // ✅ BUG 6 FIX: Seed previousPosition for bearing calc
     
-    // Create custom icon with arrow pointing in direction of movement
+    // ✅ BUG 6 FIX: Use consistent icon design with circle background
     const icon = L.divIcon({
         className: 'user-location-arrow',
         html: `
-            <svg viewBox="0 0 24 24" fill="none" style="transform: rotate(${rotation}deg); transition: transform 0.3s ease;">
-                <path d="M12 2L4 20l8-4 8 4-8-18z" fill="#3B82F6" stroke="white" stroke-width="2"/>
+            <svg viewBox="0 0 24 24" fill="none" style="transform: rotate(${rotation}deg);
+                transition: transform 0.4s ease;
+                width: 40px; height: 40px;
+                filter: drop-shadow(0 2px 6px rgba(59,130,246,0.5));">
+                <circle cx="12" cy="12" r="10"
+                    fill="rgba(59,130,246,0.15)"
+                    stroke="#3B82F6"
+                    stroke-width="1.5"/>
+                <path d="M12 5L7 17l5-2.5 5 2.5L12 5z"
+                    fill="#3B82F6"
+                    stroke="white"
+                    stroke-width="1.5"
+                    stroke-linejoin="round"/>
             </svg>
         `,
         iconSize: [40, 40],
@@ -377,38 +556,212 @@ function createDirectionalMarker(lat, lng, heading, accuracy) {
     });
 
     userMarker = L.marker([lat, lng], { icon }).addTo(map);
+}
+
+// Calculate bearing between two points (for movement-based heading)
+function calculateBearing(lat1, lon1, lat2, lon2) {
+    const φ1 = lat1 * Math.PI / 180;
+    const φ2 = lat2 * Math.PI / 180;
+    const Δλ = (lon2 - lon1) * Math.PI / 180;
     
-    // Do NOT add accuracy circle - removed as per requirement
+    const y = Math.sin(Δλ) * Math.cos(φ2);
+    const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+    const θ = Math.atan2(y, x);
+    
+    return (θ * 180 / Math.PI + 360) % 360; // Convert to degrees and normalize
 }
 
 // Update Directional Marker
+let previousPosition = null;
 function updateDirectionalMarker(lat, lng, heading, accuracy) {
-    const rotation = heading !== null && heading !== undefined ? heading : currentHeading || 0;
-    
-    // Update icon with new rotation - arrow head points in direction of movement
-    const icon = L.divIcon({
-        className: 'user-location-arrow',
-        html: `
-            <svg viewBox="0 0 24 24" fill="none" style="transform: rotate(${rotation}deg); transition: transform 0.3s ease;">
-                <path d="M12 2L4 20l8-4 8 4-8-18z" fill="#3B82F6" stroke="white" stroke-width="2"/>
-            </svg>
-        `,
-        iconSize: [40, 40],
-        iconAnchor: [20, 20]
-    });
-
-    userMarker.setIcon(icon);
-    userMarker.setLatLng([lat, lng]);
-    
-    // Store heading for future updates
-    if (heading !== null && heading !== undefined) {
+    // Calculate bearing from movement if we have previous position
+    let rotation = 0;
+    if (previousPosition && (lat !== previousPosition.lat || lng !== previousPosition.lng)) {
+        rotation = calculateBearing(previousPosition.lat, previousPosition.lng, lat, lng);
+        currentHeading = rotation; // Store calculated heading
+    } else if (heading !== null && heading !== undefined) {
+        rotation = heading; // Use device compass if available
         currentHeading = heading;
+    } else {
+        rotation = currentHeading || 0; // Use last known heading
+    }
+    
+    // Store current position for next calculation
+    previousPosition = { lat, lng };
+    
+    // ✅ BUG A FIX: Direct SVG DOM manipulation instead of setIcon()
+    const markerElement = userMarker.getElement();
+    if (markerElement) {
+        const svg = markerElement.querySelector('svg');
+        if (svg) {
+            svg.style.transform = `rotate(${rotation}deg)`;
+        }
+    }
+
+    userMarker.setLatLng([lat, lng]);
+}
+
+// ✅ BUG B FIX: Find closest point on route to user
+function findClosestRoutePointIndex(userLat, userLng, routeCoordinates) {
+    let minDistance = Infinity;
+    let closestIndex = 0;
+    
+    // 🔧 FIX: Use detected axis order from selectedRoute
+    const isGeoJSON = selectedRoute && selectedRoute._isGeoJSONOrder !== false;
+    
+    for (let i = 0; i < routeCoordinates.length; i++) {
+        const coord = routeCoordinates[i];
+        // 🔧 FIX: Extract lat/lng based on detected axis order
+        const coordLat = isGeoJSON ? coord[1] : coord[0];
+        const coordLng = isGeoJSON ? coord[0] : coord[1];
+        const distance = calculateDistance(userLat, userLng, coordLat, coordLng);
+        
+        if (distance < minDistance) {
+            minDistance = distance;
+            closestIndex = i;
+        }
+    }
+    
+    return closestIndex;
+}
+
+// ✅ BUG B & E FIX: Trim route from behind user (client-side)
+function trimRouteFromBehind(userLat, userLng) {
+    if (!selectedRoute || !selectedRoute.coordinates) return;
+    
+    const closestIndex = findClosestRoutePointIndex(userLat, userLng, selectedRoute.coordinates);
+    
+    // ✅ BUG 1 FIX: Only redraw if user has advanced at least 5 waypoints — prevents flicker
+    // NOTE: Do NOT set lastTrimIndex before the redraw check
+    if (closestIndex <= lastTrimIndex + 5) return;
+    
+    const remainingCoords = selectedRoute.coordinates.slice(closestIndex);
+    const travelledCoords = selectedRoute.coordinates.slice(0, closestIndex + 1);
+    
+    if (remainingCoords.length < 2) return;
+    
+    // ✅ Set lastTrimIndex AFTER the guard check, not before
+    lastTrimIndex = closestIndex;
+    
+    // 🔧 FIX: Use detected axis order
+    const isGeoJSON = selectedRoute._isGeoJSONOrder !== false;
+    const toLatLng = (coord) => isGeoJSON ? [coord[1], coord[0]] : [coord[0], coord[1]];
+    
+    const remainingLatLngs = remainingCoords.map(toLatLng);
+    const travelledLatLngs = travelledCoords.map(toLatLng);
+    
+    if (activeRouteLine && travelledLine) {
+        // ✅ Update existing polylines — no clear/redraw needed, no flicker
+        activeRouteLine.setLatLngs(remainingLatLngs);
+        travelledLine.setLatLngs(travelledLatLngs);
+    } else {
+        // First draw — create polyline objects
+        routeLayer.clearLayers();
+        
+        // Grey dashed travelled path
+        if (travelledLatLngs.length > 1) {
+            travelledLine = L.polyline(travelledLatLngs, {
+                color: '#64748B',
+                weight: 4,
+                opacity: 0.5,
+                dashArray: '10, 10',
+                lineJoin: 'round',
+                lineCap: 'round'
+            }).addTo(routeLayer);
+        }
+        
+        // Purple remaining route
+        activeRouteLine = L.polyline(remainingLatLngs, {
+            color: '#8B5CF6',
+            weight: 6,
+            opacity: 0.9,
+            lineJoin: 'round',
+            lineCap: 'round'
+        }).addTo(routeLayer);
+        
+        // 🔧 FIX: Destination marker uses correct axis too
+        const lastCoord = selectedRoute.coordinates[selectedRoute.coordinates.length - 1];
+        const destLatLng = isGeoJSON ? [lastCoord[1], lastCoord[0]] : [lastCoord[0], lastCoord[1]];
+        const destIcon = L.divIcon({
+            className: 'destination-marker',
+            html: `<div style="width:30px;height:30px;background:#EF4444;border:3px solid white;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.4);"></div>`,
+            iconSize: [30, 30],
+            iconAnchor: [15, 15]
+        });
+        L.marker(destLatLng, { icon: destIcon }).addTo(routeLayer);
+    }
+}
+
+// ✅ BUG H FIX: Check if user has arrived at destination
+function checkArrival(userLat, userLng) {
+    if (!selectedRoute || !selectedRoute.coordinates) return;
+    
+    const destination = selectedRoute.coordinates[selectedRoute.coordinates.length - 1];
+    
+    // 🔧 FIX: Use detected axis order for destination coordinates
+    const isGeoJSON = selectedRoute._isGeoJSONOrder !== false;
+    const destLat = isGeoJSON ? destination[1] : destination[0];
+    const destLng = isGeoJSON ? destination[0] : destination[1];
+    
+    const distanceToDestination = calculateDistance(userLat, userLng, destLat, destLng);
+    
+    // User has arrived if within 30 meters
+    if (distanceToDestination <= 30) {
+        isNavigating = false;
+        showNotification('🎉 You have arrived at your destination!', 'success');
+        
+        // Play arrival sound
+        playArrivalSound();
+        
+        // ✅ BUG 4 FIX: Keep GPS watch running — user may want to start new navigation
+        // Only stop NAVIGATION state, not location tracking itself
+        // watchId remains active for proximity alerts and future navigation
+        
+        // Reset route display
+        lastTrimIndex = 0;
+        activeRouteLine = null;
+        travelledLine = null;
+    }
+}
+
+// Play arrival sound
+function playArrivalSound() {
+    try {
+        if (!sharedAudioContext || sharedAudioContext.state === 'closed') {
+            sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (sharedAudioContext.state === 'suspended') {
+            sharedAudioContext.resume();
+        }
+        const audioContext = sharedAudioContext;
+        
+        // Play cheerful arrival melody
+        const notes = [523.25, 659.25, 783.99]; // C5, E5, G5
+        notes.forEach((freq, i) => {
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            oscillator.frequency.value = freq;
+            oscillator.type = 'sine';
+            
+            gainNode.gain.setValueAtTime(0.3, audioContext.currentTime + i * 0.2);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + i * 0.2 + 0.3);
+            
+            oscillator.start(audioContext.currentTime + i * 0.2);
+            oscillator.stop(audioContext.currentTime + i * 0.2 + 0.3);
+        });
+    } catch (error) {
+        console.warn('Audio not supported:', error);
     }
 }
 
 // Check Deviation from Route
+let isRerouting = false;
 async function checkDeviation() {
-    if (!currentPosition || !selectedRoute) return;
+    if (!currentPosition || !selectedRoute || isRerouting) return;
 
     try {
         const response = await apiCall('/check-deviation', {
@@ -422,11 +775,25 @@ async function checkDeviation() {
         });
 
         if (response.data.deviated) {
+            // ✅ BUG G FIX: Pause navigation during reroute
+            isRerouting = true;
+            const wasNavigating = isNavigating;
+            isNavigating = false;
+            
             showNotification('You have deviated from the route. Recalculating...', 'warning');
-            // Trigger reroute
-            const destInput = document.getElementById('destInput');
-            if (destInput.value) {
-                findRoutes();
+            
+            try {
+                // Trigger reroute
+                const destInput = document.getElementById('destInput');
+                if (destInput.value) {
+                    await findRoutes();
+                }
+            } catch (rerouteError) {
+                console.error('Reroute failed:', rerouteError);
+                showNotification('Failed to recalculate route. Continuing with original route.', 'error');
+                isNavigating = wasNavigating; // Restore navigation state
+            } finally {
+                isRerouting = false;
             }
         } else if (response.data.remainingRoute) {
             // Update route to show only remaining path
@@ -434,6 +801,7 @@ async function checkDeviation() {
         }
     } catch (error) {
         console.error('Deviation check error:', error);
+        isRerouting = false;
     }
 }
 
@@ -442,27 +810,73 @@ function updateRemainingRoute(remainingCoordinates) {
     if (!routeLayer) return;
 
     routeLayer.clearLayers();
+    
+    // ✅ BUG 1 FIX: Reset trim state — clearLayers removed the old polyline objects
+    activeRouteLine = null;
+    travelledLine = null;
+    lastTrimIndex = 0;
 
-    // Draw remaining route
     const latlngs = remainingCoordinates.map(coord => [coord[1], coord[0]]);
     
-    L.polyline(latlngs, {
+    // ✅ Store as activeRouteLine so trimRouteFromBehind can update it later
+    activeRouteLine = L.polyline(latlngs, {
         color: '#8B5CF6',
-        weight: 5,
-        opacity: 0.8,
-        lineJoin: 'round'
+        weight: 6,
+        opacity: 0.9,
+        lineJoin: 'round',
+        lineCap: 'round'
     }).addTo(routeLayer);
 
     // Add destination marker
     const lastCoord = remainingCoordinates[remainingCoordinates.length - 1];
     const destIcon = L.divIcon({
         className: 'destination-marker',
-        html: `<div style="width: 30px; height: 30px; background: #EF4444; border: 3px solid white; border-radius: 50%; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"></div>`,
+        html: `<div style="width:30px;height:30px;background:#EF4444;border:3px solid white;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.4);"></div>`,
         iconSize: [30, 30],
         iconAnchor: [15, 15]
     });
 
     L.marker([lastCoord[1], lastCoord[0]], { icon: destIcon }).addTo(routeLayer);
+}
+
+// ✅ BUG 5 FIX: Async location picker modal — replaces prompt() which is broken in PWA/WebView
+function showLocationPickerModal(options) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 20px;`;
+        
+        const modal = document.createElement('div');
+        modal.style.cssText = `background: #0a0e1a; border: 1px solid rgba(139,92,246,0.4); border-radius: 12px; padding: 24px; max-width: 400px; width: 100%; max-height: 80vh; overflow-y: auto;`;
+        
+        modal.innerHTML = `
+            <h3 style="color: #fff; margin: 0 0 8px; font-size: 16px;">Multiple locations found</h3>
+            <p style="color: #94A3B8; font-size: 13px; margin: 0 0 16px;">Select the correct destination:</p>
+            ${options.map((opt, i) => `
+                <button data-index="${i}" style="display: block; width: 100%; text-align: left; padding: 12px 14px; margin: 0 0 8px; background: rgba(139,92,246,0.08); border: 1px solid rgba(139,92,246,0.25); border-radius: 8px; color: #fff; cursor: pointer; font-size: 13px; line-height: 1.4;">
+                    ${opt.address}
+                </button>
+            `).join('')}
+            <button id="cancelLocationPick" style="margin-top: 8px; color: #64748B; background: none; border: none; cursor: pointer; font-size: 13px; width: 100%; padding: 8px;">Cancel</button>
+        `;
+        
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+        
+        modal.querySelectorAll('button[data-index]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                overlay.remove();
+                resolve(options[parseInt(btn.dataset.index)]);
+            });
+        });
+        
+        const cancelBtn = document.getElementById('cancelLocationPick');
+        if (cancelBtn) {
+            cancelBtn.addEventListener('click', () => {
+                overlay.remove();
+                resolve(null);
+            });
+        }
+    });
 }
 
 // Find Routes
@@ -482,56 +896,139 @@ async function findRoutes() {
     try {
         let startLat, startLng;
 
-        // Determine start location
-        if (usingGPS && currentPosition) {
-            // Use GPS location
+        // Determine start location - prioritize manual input over GPS
+        if (startValue && !startValue.includes('Getting location')) {
+            // User has entered a manual address - use it regardless of GPS status
+            // Check if it's coordinates format (lat, lng)
+            const coordMatch = startValue.match(/^(-?\d+\.?\d*),\s*(-?\d+\.?\d*)$/);
+            
+            if (coordMatch) {
+                // Direct coordinates provided
+                startLat = parseFloat(coordMatch[1]);
+                startLng = parseFloat(coordMatch[2]);
+                console.log('Using coordinate input:', startLat, startLng);
+            } else {
+                // Address string - geocode it
+                try {
+                    const startGeocodeResponse = await apiCall('/geocode', {
+                        method: 'POST',
+                        body: JSON.stringify({ address: startValue })
+                    });
+                    const startLocation = startGeocodeResponse.data;
+                    startLat = startLocation.latitude;
+                    startLng = startLocation.longitude;
+                    console.log('Geocoded start address:', startValue, '->', startLat, startLng);
+                    
+                    // Update manual start location
+                    manualStartLocation = { latitude: startLat, longitude: startLng };
+                    usingGPS = false; // Explicitly disable GPS mode
+                    
+                    // Update marker for manual location
+                    if (!userMarker) {
+                        const icon = L.divIcon({
+                            className: 'user-location-marker',
+                            html: `<div style="width: 20px; height: 20px; background: #F59E0B; border: 3px solid white; border-radius: 50%; box-shadow: 0 2px 8px rgba(0,0,0,0.4);"></div>`,
+                            iconSize: [20, 20],
+                            iconAnchor: [10, 10]
+                        });
+                        userMarker = L.marker([startLat, startLng], { icon }).addTo(map);
+                    } else {
+                        userMarker.setLatLng([startLat, startLng]);
+                    }
+                    map.setView([startLat, startLng], 14);
+                } catch (error) {
+                    showNotification('Could not find starting location. Please check the address.', 'error');
+                    showLoading(false);
+                    return;
+                }
+            }
+        } else if (usingGPS && currentPosition) {
+            // No manual input - use GPS location
             startLat = currentPosition.latitude;
             startLng = currentPosition.longitude;
-        } else if (startValue) {
-            // Use manual address input - geocode it
-            try {
-                const startGeocodeResponse = await apiCall('/geocode', {
-                    method: 'POST',
-                    body: JSON.stringify({ address: startValue })
-                });
-                const startLocation = startGeocodeResponse.data;
-                startLat = startLocation.latitude;
-                startLng = startLocation.longitude;
-                
-                // Update manual start location
-                manualStartLocation = { latitude: startLat, longitude: startLng };
-                
-                // Update marker for manual location
-                if (!userMarker) {
-                    const icon = L.divIcon({
-                        className: 'user-location-marker',
-                        html: `<div style="width: 20px; height: 20px; background: #F59E0B; border: 3px solid white; border-radius: 50%; box-shadow: 0 2px 8px rgba(0,0,0,0.4);"></div>`,
-                        iconSize: [20, 20],
-                        iconAnchor: [10, 10]
-                    });
-                    userMarker = L.marker([startLat, startLng], { icon }).addTo(map);
-                } else {
-                    userMarker.setLatLng([startLat, startLng]);
-                }
-                map.setView([startLat, startLng], 14);
-            } catch (error) {
-                showNotification('Could not find starting location. Please check the address.', 'error');
-                showLoading(false);
-                return;
-            }
+            console.log('Using GPS location:', startLat, startLng);
         } else {
             showNotification('Please enter a starting location or use GPS', 'error');
             showLoading(false);
             return;
         }
 
-        // Geocode destination
-        const geocodeResponse = await apiCall('/geocode', {
-            method: 'POST',
-            body: JSON.stringify({ address: destValue })
-        });
+        // STEP 2: Check if user picked from autocomplete — use exact coords
+        let destination;
+        
+        // Check if user already picked from autocomplete — use those exact coords
+        const storedLat = parseFloat(destInput.dataset.lat);
+        const storedLng = parseFloat(destInput.dataset.lng);
+        
+        if (!isNaN(storedLat) && !isNaN(storedLng)) {
+            // ✅ User picked from dropdown — skip geocoding entirely
+            // These coords came directly from the autocomplete API and are exact
+            console.log('[DEST] Using autocomplete coords — skipping geocoder:', storedLat, storedLng);
+            destination = {
+                latitude: storedLat,
+                longitude: storedLng,
+                address: destValue
+            };
+        } else {
+            // User typed manually without picking — must geocode
+            console.log('[DEST] No stored coords — geocoding manually typed address');
+            
+            const geocodeResponse = await apiCall('/geocode', {
+                method: 'POST',
+                body: JSON.stringify({ address: destValue, returnMultiple: true })
+            });
 
-        const destination = geocodeResponse.data;
+            const results = Array.isArray(geocodeResponse.data) ? geocodeResponse.data : [geocodeResponse.data];
+            
+            console.log('Geocoding results:', results);
+
+            // If we got multiple results, let user choose
+            if (results.length > 1) {
+                // Filter out vague results (just city/state)
+                const specificResults = results.filter(r => {
+                    const addr = r.address.toLowerCase();
+                    const type = r.type ? r.type.toLowerCase() : '';
+                    
+                    // Reject if it's just a city, state, or country
+                    if (type === 'city' || type === 'state' || type === 'country' || type === 'administrative') {
+                        return false;
+                    }
+                    
+                    // Reject if address is too short (likely just city name)
+                    if (addr.split(',').length < 3) {
+                        return false;
+                    }
+                    
+                    return true;
+                });
+
+                if (specificResults.length === 0) {
+                    showNotification('Location too vague. Please enter a more specific address (e.g., include road name, landmark, or area)', 'error');
+                    showLoading(false);
+                    return;
+                }
+
+                destination = await showLocationPickerModal(specificResults);
+                if (!destination) {
+                    showLoading(false);
+                    return;
+                }
+            } else {
+                destination = results[0];
+                
+                // Check if result is too vague
+                const type = destination.type ? destination.type.toLowerCase() : '';
+                const addrParts = destination.address.split(',');
+                
+                if (type === 'city' || type === 'state' || type === 'country' || type === 'administrative' || addrParts.length < 3) {
+                    showNotification('Location too vague. Please enter a more specific address with road name, landmark, or area.', 'error');
+                    showLoading(false);
+                    return;
+                }
+            }
+
+            console.log('Selected destination:', destination);
+        }
 
         // Calculate distance
         const distance = calculateDistanceKm(
@@ -559,6 +1056,19 @@ async function findRoutes() {
             );
         }
 
+        console.log('=== SENDING ROUTE REQUEST ===');
+        console.log('Start:', { lat: startLat, lng: startLng, address: startValue });
+        console.log('End:', { lat: destination.latitude, lng: destination.longitude, address: destValue });
+        console.log('Travel mode:', travelMode);
+        console.log('============================');
+
+        // Store intended destination for validation
+        const intendedDestination = {
+            latitude: destination.latitude,
+            longitude: destination.longitude,
+            address: destination.address
+        };
+
         // Get routes
         const routesResponse = await apiCall('/routes', {
             method: 'POST',
@@ -584,27 +1094,133 @@ async function findRoutes() {
             throw new Error('No routes found in response');
         }
 
-        routes = routesResponse.data.routes;
+        // CRITICAL VALIDATION: Verify routes actually go to intended destination
+        routes = routesResponse.data.routes; // ✅ Assign to GLOBAL routes, not const
+        let validRoutes = [];
+        
+        for (const route of routes) {
+            if (!route.coordinates || route.coordinates.length === 0) {
+                console.warn('Route has no coordinates, skipping');
+                continue;
+            }
+            
+            // 🔧 FIX: Detect coordinate order from the route's START point, not the end point.
+            // We know startLat and startLng exactly. Check both [0] and [1] of the first coordinate
+            // to determine which axis order this backend uses. This self-calibrates automatically.
+            const firstCoord = route.coordinates[0];
+            const lastCoord = route.coordinates[route.coordinates.length - 1];
+
+            // 🔧 FIX: Test BOTH possible orderings against the known start point.
+            // GeoJSON standard: coord = [lng, lat] → lat=coord[1], lng=coord[0]
+            // Some backends: coord = [lat, lng] → lat=coord[0], lng=coord[1]
+            const distIfGeoJSON = calculateDistanceKm(
+                firstCoord[1], firstCoord[0],  // treating as [lng, lat]
+                startLat, startLng
+            );
+            const distIfSwapped = calculateDistanceKm(
+                firstCoord[0], firstCoord[1],  // treating as [lat, lng]
+                startLat, startLng
+            );
+
+            // 🔧 FIX: Whichever interpretation puts the route START near our known start point
+            // is the correct axis order. Use that same order for the END point check.
+            const isGeoJSONOrder = distIfGeoJSON <= distIfSwapped;
+
+            console.log(`Route ${route.id} axis detection:`, {
+                firstCoord,
+                distIfGeoJSON: distIfGeoJSON.toFixed(3) + ' km',
+                distIfSwapped: distIfSwapped.toFixed(3) + ' km',
+                isGeoJSONOrder,
+                detectedOrder: isGeoJSONOrder ? '[lng, lat]' : '[lat, lng]'
+            });
+
+            // 🔧 FIX: Now extract route end using the DETECTED correct axis order
+            let routeEndLat, routeEndLng;
+            if (isGeoJSONOrder) {
+                // Standard GeoJSON: [lng, lat]
+                routeEndLat = lastCoord[1];
+                routeEndLng = lastCoord[0];
+            } else {
+                // Swapped backend: [lat, lng]
+                routeEndLat = lastCoord[0];
+                routeEndLng = lastCoord[1];
+            }
+            
+            // Calculate distance between route end and intended destination
+            const endPointDistance = calculateDistanceKm(
+                routeEndLat,
+                routeEndLng,
+                intendedDestination.latitude,
+                intendedDestination.longitude
+            );
+            
+            console.log(`Route ${route.id} end validation:`, {
+                routeEnd: { lat: routeEndLat, lng: routeEndLng },
+                intendedDest: { lat: intendedDestination.latitude, lng: intendedDestination.longitude },
+                distanceKm: endPointDistance.toFixed(3)
+            });
+
+            // 🔧 FIX: Attach detected axis order to route object so drawRoute() uses it correctly
+            route._isGeoJSONOrder = isGeoJSONOrder;
+            
+            // Route must end within 500 meters of intended destination
+            if (endPointDistance > 0.5) {
+                console.error(`Route ${route.id} rejected — ends ${endPointDistance.toFixed(2)}km from destination`);
+                continue; // Skip this invalid route
+            }
+            
+            validRoutes.push(route);
+        }
+        
+        // If NO routes go to the correct destination, STOP
+        if (validRoutes.length === 0) {
+            console.error('CRITICAL ERROR: No routes found that go to the intended destination!');
+            console.error('Intended destination:', intendedDestination);
+            console.error('All routes were rejected for not reaching the destination');
+            
+            showNotification(
+                'ERROR: Routes found do not go to your intended destination. This may be due to:\n\n' +
+                '1. Location name is ambiguous\n2. Routing service error\n3. No roads connect to exact location\n\n' +
+                'Please try:\n• More specific address\n• Nearby landmark\n• Different location',
+                'error'
+            );
+            showLoading(false);
+            return;
+        }
+        
+        // Warn user if some routes were rejected
+        if (validRoutes.length < routes.length) {
+            const rejectedCount = routes.length - validRoutes.length;
+            console.warn(`${rejectedCount} route(s) rejected for not reaching intended destination`);
+            showNotification(
+                `${rejectedCount} route(s) filtered out for not reaching your exact destination. Showing ${validRoutes.length} valid route(s).`,
+                'warning'
+            );
+        }
+        
+        // Use only valid routes
+        routesResponse.data.routes = validRoutes;
+        routes = validRoutes; // ✅ Sync back to global routes array
+
         const dangerZones = routesResponse.data.dangerZones || [];
 
-        console.log('Routes received:', routes.length);
-        console.log('First route:', routes[0]);
-        console.log('AI Insights:', routes[0]?.aiInsights);
-        console.log('Navigation Guidance:', routes[0]?.navigationGuidance);
+        console.log('Routes received:', validRoutes.length);
+        console.log('First route:', validRoutes[0]);
+        console.log('AI Insights:', validRoutes[0]?.aiInsights);
+        console.log('Navigation Guidance:', validRoutes[0]?.navigationGuidance);
 
-        // Validate routes have coordinates
-        const validRoutes = routes.filter(route => 
+        // Additional validation: routes must have coordinates
+        validRoutes = validRoutes.filter(route => 
             route && route.coordinates && Array.isArray(route.coordinates) && route.coordinates.length > 0
         );
+        routes = validRoutes; // ✅ BUG 3 FIX: Re-sync global after second filter pass
 
         if (validRoutes.length === 0) {
             throw new Error('No valid routes with coordinates found');
         }
 
-        routes = validRoutes;
-
         // Display routes
-        displayRoutes(routes);
+        displayRoutes(validRoutes);
 
         // Display danger zones
         displayDangerZones(dangerZones);
@@ -617,7 +1233,10 @@ async function findRoutes() {
         showNotification(`Found ${routes.length} route${routes.length > 1 ? 's' : ''}`, 'success');
     } catch (error) {
         console.error('Route finding error:', error);
-        showNotification(error.message || 'Failed to find routes', 'error');
+        
+        // Show clear error message
+        let errorMessage = error.message || 'Failed to find routes';
+        showNotification(errorMessage, 'error');
     } finally {
         showLoading(false);
     }
@@ -640,6 +1259,29 @@ function calculateDistanceKm(lat1, lon1, lat2, lon2) {
     return R * c; // Distance in kilometers
 }
 
+// Throttle function for performance optimization
+function throttle(func, delay) {
+    let lastCall = 0;
+    return function(...args) {
+        const now = Date.now();
+        if (now - lastCall >= delay) {
+            lastCall = now;
+            return func.apply(this, args);
+        }
+    };
+}
+
+// ✅ BUG 4 FIX: Throttled deviation check — max once every 10 seconds
+const throttledCheckDeviation = throttle(checkDeviation, 10000);
+
+// Debounce function for input optimization
+function debounce(func, delay) {
+    let timeoutId;
+    return function(...args) {
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => func.apply(this, args), delay);
+    };
+}
 // Display Routes
 function displayRoutes(routesList) {
     const routesSection = document.getElementById('routesSection');
@@ -692,6 +1334,11 @@ function displayRoutes(routesList) {
 // Select Route
 function selectRoute(index) {
     selectedRoute = routes[index];
+    
+    // ✅ BUG 2 FIX: Reset trim state so new route draws from scratch
+    lastTrimIndex = 0;
+    activeRouteLine = null;
+    travelledLine = null;
 
     // Update UI
     document.querySelectorAll('.route-card').forEach((card, i) => {
@@ -700,6 +1347,17 @@ function selectRoute(index) {
 
     // Draw route on map
     drawRoute(selectedRoute);
+
+    // ✅ BUG 4 FIX: Zoom to USER position at street level, not route center
+    setTimeout(() => {
+        if (map && isNavigating && currentPosition) {
+            map.setView(
+                [currentPosition.latitude, currentPosition.longitude],
+                17,
+                { animate: true }
+            );
+        }
+    }, 1000);
 
     // Show intelligence panel
     showIntelligencePanel(selectedRoute);
@@ -732,12 +1390,18 @@ function drawRoute(route) {
     routeLayer.clearLayers();
 
     try {
+        // 🔧 FIX: Use the axis order detected during route validation in findRoutes()
+        // If _isGeoJSONOrder is true → coords are [lng, lat] → Leaflet needs [coord[1], coord[0]]
+        // If _isGeoJSONOrder is false → coords are [lat, lng] → Leaflet needs [coord[0], coord[1]]
+        const isGeoJSON = route._isGeoJSONOrder !== false; // default to GeoJSON if not set
+
         const latlngs = route.coordinates.map(coord => {
             if (!Array.isArray(coord) || coord.length < 2) {
                 console.warn('Invalid coordinate:', coord);
                 return null;
             }
-            return [coord[1], coord[0]];
+            // 🔧 FIX: Apply correct axis extraction based on detected order
+            return isGeoJSON ? [coord[1], coord[0]] : [coord[0], coord[1]];
         }).filter(coord => coord !== null);
 
         if (latlngs.length === 0) {
@@ -756,6 +1420,11 @@ function drawRoute(route) {
         // Add destination marker
         const lastCoord = route.coordinates[route.coordinates.length - 1];
         if (Array.isArray(lastCoord) && lastCoord.length >= 2) {
+            // 🔧 FIX: Same axis correction for destination marker
+            const destLatLng = isGeoJSON 
+                ? [lastCoord[1], lastCoord[0]] 
+                : [lastCoord[0], lastCoord[1]];
+
             const destIcon = L.divIcon({
                 className: 'destination-marker',
                 html: `<div style="width: 30px; height: 30px; background: #EF4444; border: 3px solid white; border-radius: 50%; box-shadow: 0 2px 8px rgba(0,0,0,0.4);"></div>`,
@@ -763,7 +1432,7 @@ function drawRoute(route) {
                 iconAnchor: [15, 15]
             });
 
-            L.marker([lastCoord[1], lastCoord[0]], { icon: destIcon }).addTo(routeLayer);
+            L.marker(destLatLng, { icon: destIcon }).addTo(routeLayer);
         }
 
         // Fit map to route
@@ -774,13 +1443,24 @@ function drawRoute(route) {
     }
 }
 
-// Display Danger Zones
+// Display Danger Zones with performance optimization
 function displayDangerZones(zones) {
+    allDangerZones = zones || []; // ✅ Store zones for proximity checking
     if (!dangerZoneLayer) return;
 
     dangerZoneLayer.clearLayers();
 
-    zones.forEach(zone => {
+    // Performance optimization: Limit number of zones displayed at once
+    const MAX_ZONES_DISPLAY = 100;
+    const zonesToDisplay = zones.slice(0, MAX_ZONES_DISPLAY);
+    
+    if (zones.length > MAX_ZONES_DISPLAY) {
+        console.log(`Displaying ${MAX_ZONES_DISPLAY} of ${zones.length} danger zones for performance`);
+    }
+
+    // ✅ BUG 13 FIX: Removed unused fragment variable
+
+    zonesToDisplay.forEach(zone => {
         // Determine color based on severity - DARKER COLORS
         const severityKey = zone.severity || 'medium';
         const color = {
@@ -798,7 +1478,7 @@ function displayDangerZones(zones) {
 
         // Draw circle
         const circle = L.circle([zone.latitude, zone.longitude], {
-            radius: zone.radius,
+            radius: zone.radius || zone.radius_meters || 200, // ✅ BUG 7 FIX: Normalize field names
             color: color,
             fillColor: color,
             fillOpacity: fillOpacity,
@@ -807,53 +1487,54 @@ function displayDangerZones(zones) {
             className: isVerified ? 'verified-danger-zone' : 'user-danger-zone'
         }).addTo(dangerZoneLayer);
 
-        // Create popup content
-        let popupContent = `
-            <div style="padding: 8px; font-family: Inter, sans-serif; min-width: 200px;">
-                ${isVerified ? `
-                    <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px;">
-                        <svg viewBox="0 0 24 24" fill="none" style="width: 16px; height: 16px; color: #10B981;">
-                            <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" stroke-width="2"/>
-                        </svg>
-                        <span style="font-size: 11px; color: #10B981; font-weight: 600; text-transform: uppercase;">Verified Zone</span>
+        // Create popup content - lazy load to improve initial render
+        circle.on('click', function() {
+            const popupContent = `
+                <div style="padding: 8px; font-family: Inter, sans-serif; min-width: 200px;">
+                    ${isVerified ? `
+                        <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px;">
+                            <svg viewBox="0 0 24 24" fill="none" style="width: 16px; height: 16px; color: #10B981;">
+                                <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" stroke-width="2"/>
+                            </svg>
+                            <span style="font-size: 11px; color: #10B981; font-weight: 600; text-transform: uppercase;">Verified Zone</span>
+                        </div>
+                    ` : ''}
+                    <div style="font-weight: 700; margin-bottom: 4px; text-transform: capitalize; color: #0A0E1A;">
+                        ${zone.placeName || zone.category.replace(/_/g, ' ')}
                     </div>
-                ` : ''}
-                <div style="font-weight: 700; margin-bottom: 4px; text-transform: capitalize; color: #0A0E1A;">
-                    ${zone.placeName || zone.category.replace(/_/g, ' ')}
-                </div>
-                <div style="font-size: 12px; color: #64748B; margin-bottom: 8px;">
-                    ${zone.description || 'No description'}
-                </div>
-                <div style="font-size: 11px; color: #94A3B8;">
-                    <div style="margin-bottom: 4px;">
-                        <span style="font-weight: 600;">Risk:</span> 
-                        <span style="color: ${color}; font-weight: 600; text-transform: capitalize;">${severityKey}</span>
+                    <div style="font-size: 12px; color: #64748B; margin-bottom: 8px;">
+                        ${zone.description || 'No description'}
                     </div>
-                    ${zone.activeHours ? `
+                    <div style="font-size: 11px; color: #94A3B8;">
                         <div style="margin-bottom: 4px;">
-                            <span style="font-weight: 600;">Active Hours:</span> ${zone.activeHours}
+                            <span style="font-weight: 600;">Risk:</span> 
+                            <span style="color: ${color}; font-weight: 600; text-transform: capitalize;">${severityKey}</span>
                         </div>
-                    ` : ''}
-                    ${zone.reportCount ? `
-                        <div style="margin-bottom: 4px;">
-                            <span style="font-weight: 600;">Reports:</span> ${zone.reportCount}
-                        </div>
-                    ` : ''}
-                    ${zone.source ? `
-                        <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid #E5E7EB; font-size: 10px; color: #9CA3AF;">
-                            Source: ${zone.source}
-                        </div>
-                    ` : ''}
-                    ${zone.lastReported ? `
-                        <div style="margin-top: 4px;">
-                            <span style="font-weight: 600;">Last:</span> ${new Date(zone.lastReported).toLocaleDateString()}
-                        </div>
-                    ` : ''}
+                        ${zone.activeHours ? `
+                            <div style="margin-bottom: 4px;">
+                                <span style="font-weight: 600;">Active Hours:</span> ${zone.activeHours}
+                            </div>
+                        ` : ''}
+                        ${zone.reportCount ? `
+                            <div style="margin-bottom: 4px;">
+                                <span style="font-weight: 600;">Reports:</span> ${zone.reportCount}
+                            </div>
+                        ` : ''}
+                        ${zone.source ? `
+                            <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid #E5E7EB; font-size: 10px; color: #9CA3AF;">
+                                Source: ${zone.source}
+                            </div>
+                        ` : ''}
+                        ${zone.lastReported ? `
+                            <div style="margin-top: 4px;">
+                                <span style="font-weight: 600;">Last:</span> ${new Date(zone.lastReported).toLocaleDateString()}
+                            </div>
+                        ` : ''}
+                    </div>
                 </div>
-            </div>
-        `;
-
-        circle.bindPopup(popupContent);
+            `;
+            circle.bindPopup(popupContent).openPopup();
+        });
     });
 }
 
@@ -1085,7 +1766,7 @@ async function loadRouteHistory() {
 
     try {
         const response = await apiCall('/history');
-        const history = response.data.history;
+        const history = response?.data?.history || []; // ✅ BUG 9 FIX: Safe access with fallback
 
         const historyList = document.getElementById('historyList');
 
@@ -1143,12 +1824,31 @@ function showLoading(show) {
     document.getElementById('loadingOverlay').style.display = show ? 'flex' : 'none';
 }
 
-// Show Notification
+// Show Notification with queue management to prevent spam
+let notificationQueue = [];
+let isShowingNotification = false;
+
 function showNotification(message, type = 'info') {
-    // Simple notification - can be enhanced with a toast library
     console.log(`[${type.toUpperCase()}] ${message}`);
     
-    // You can implement a toast notification here
+    // Add to queue
+    notificationQueue.push({ message, type });
+    
+    // Process queue if not already showing
+    if (!isShowingNotification) {
+        processNotificationQueue();
+    }
+}
+
+function processNotificationQueue() {
+    if (notificationQueue.length === 0) {
+        isShowingNotification = false;
+        return;
+    }
+    
+    isShowingNotification = true;
+    const { message, type } = notificationQueue.shift();
+    
     const colors = {
         success: '#10B981',
         error: '#EF4444',
@@ -1171,14 +1871,49 @@ function showNotification(message, type = 'info') {
         box-shadow: 0 4px 12px rgba(0,0,0,0.3);
         backdrop-filter: blur(20px);
         max-width: 300px;
+        animation: slideIn 0.3s ease-out;
     `;
     notification.textContent = message;
     document.body.appendChild(notification);
 
     setTimeout(() => {
-        notification.remove();
-    }, 4000);
+        notification.style.animation = 'slideOut 0.3s ease-in';
+        setTimeout(() => {
+            notification.remove();
+            processNotificationQueue(); // Process next in queue
+        }, 300);
+    }, 3000);
 }
+
+// Add CSS animations for notifications
+if (!document.getElementById('notification-styles')) {
+    const style = document.createElement('style');
+    style.id = 'notification-styles';
+    style.textContent = `
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        @keyframes slideOut {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+        }
+    `;
+    document.head.appendChild(style);
+}
+
 
 // Setup Location Autocomplete with API
 function setupLocationAutocomplete() {
@@ -1219,7 +1954,17 @@ function setupAutocompleteForInput(inputId) {
     let inputAutocompleteTimeout = null;
 
     input.addEventListener('input', async (e) => {
+        // STEP 1: Clear stored coords when user types manually (prevents stale coords)
+        input.dataset.lat = '';
+        input.dataset.lng = '';
+        
         const query = e.target.value.trim();
+        
+        // If this is start input and user is typing, disable GPS mode
+        if (inputId === 'startInput' && query.length > 0 && !query.includes('Getting location')) {
+            usingGPS = false;
+            updateLocationStatus('Manual input mode', 'info');
+        }
         
         // Clear previous timeout
         if (inputAutocompleteTimeout) {
@@ -1285,7 +2030,7 @@ function setupAutocompleteForInput(inputId) {
                 console.error('Autocomplete error:', error);
                 suggestionsDiv.innerHTML = '<div style="padding: 12px 16px; color: #EF4444;">Failed to load suggestions</div>';
             }
-        }, 300); // 300ms debounce
+        }, DEBOUNCE_DELAY); // Use constant for consistency
     });
 
     // Hide suggestions when clicking outside
@@ -1297,18 +2042,30 @@ function setupAutocompleteForInput(inputId) {
 }
 
 // Event Listeners
-document.getElementById('findRoutesBtn').addEventListener('click', findRoutes);
+const findRoutesBtn = document.getElementById('findRoutesBtn');
+if (findRoutesBtn) {
+    findRoutesBtn.addEventListener('click', findRoutes);
+}
 
-document.getElementById('useLocationBtn').addEventListener('click', useMyLocation);
+const useLocationBtn = document.getElementById('useLocationBtn');
+if (useLocationBtn) {
+    useLocationBtn.addEventListener('click', useMyLocation);
+}
 
 // Theme toggle buttons
-document.getElementById('brightThemeBtn').addEventListener('click', () => {
-    toggleMapTheme('bright');
-});
+const brightThemeBtn = document.getElementById('brightThemeBtn');
+if (brightThemeBtn) {
+    brightThemeBtn.addEventListener('click', () => {
+        toggleMapTheme('bright');
+    });
+}
 
-document.getElementById('darkThemeBtn').addEventListener('click', () => {
-    toggleMapTheme('dark');
-});
+const darkThemeBtn = document.getElementById('darkThemeBtn');
+if (darkThemeBtn) {
+    darkThemeBtn.addEventListener('click', () => {
+        toggleMapTheme('dark');
+    });
+}
 
 // Travel mode selection
 document.querySelectorAll('.travel-mode-btn').forEach(btn => {
@@ -1329,95 +2086,175 @@ document.querySelectorAll('.travel-mode-btn').forEach(btn => {
             'driving-car': 'Driving mode selected'
         };
         
-        document.getElementById('travelModeHint').textContent = modeNames[travelMode];
+        const travelModeHint = document.getElementById('travelModeHint');
+        if (travelModeHint) {
+            travelModeHint.textContent = modeNames[travelMode];
+        }
         
-        showNotification(`Travel mode changed to ${btn.querySelector('span').textContent}`, 'success');
+        const btnText = btn.querySelector('span');
+        if (btnText) {
+            showNotification(`Travel mode changed to ${btnText.textContent}`, 'success');
+        }
     });
 });
 
 // Set default active mode
-document.querySelector('.travel-mode-btn[data-mode="foot-walking"]').classList.add('active');
+const defaultModeBtn = document.querySelector('.travel-mode-btn[data-mode="foot-walking"]');
+if (defaultModeBtn) {
+    defaultModeBtn.classList.add('active');
+}
 
-document.getElementById('startInput').addEventListener('input', () => {
-    // When user types manually, disable GPS mode
-    const startInput = document.getElementById('startInput');
-    if (startInput.value && !startInput.value.match(/^-?\d+\.\d+,\s*-?\d+\.\d+$/)) {
-        usingGPS = false;
-        updateLocationStatus('Manual input mode', 'info');
+// ✅ BUG 5 FIX: Removed duplicate startInput listener — setupAutocompleteForInput already handles this
+
+const startInput = document.getElementById('startInput');
+if (startInput) {
+    startInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            findRoutes();
+        }
+    });
+}
+
+const destInput = document.getElementById('destInput');
+if (destInput) {
+    destInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            findRoutes();
+        }
+    });
+}
+
+const locateBtn = document.getElementById('locateBtn');
+if (locateBtn) {
+    locateBtn.addEventListener('click', () => {
+        if (currentPosition && userMarker) {
+            map.setView([currentPosition.latitude, currentPosition.longitude], 15);
+        }
+    });
+}
+
+const reportBtn = document.getElementById('reportBtn');
+if (reportBtn) {
+    reportBtn.addEventListener('click', () => {
+        const reportModal = document.getElementById('reportModal');
+        if (reportModal) {
+            reportModal.style.display = 'flex';
+        }
+    });
+}
+
+const closeReportModal = document.getElementById('closeReportModal');
+if (closeReportModal) {
+    closeReportModal.addEventListener('click', () => {
+        const reportModal = document.getElementById('reportModal');
+        if (reportModal) {
+            reportModal.style.display = 'none';
+        }
+    });
+}
+
+const submitReportBtn = document.getElementById('submitReportBtn');
+if (submitReportBtn) {
+    submitReportBtn.addEventListener('click', async () => {
+        if (!currentPosition) {
+            showNotification('Location not available', 'error');
+            return;
+        }
+
+        const reportSeverity = document.getElementById('reportSeverity');
+        const reportCategory = document.getElementById('reportCategory');
+        const reportDescription = document.getElementById('reportDescription');
+        
+        if (!reportSeverity || !reportCategory || !reportDescription) {
+            showNotification('Report form elements not found', 'error');
+            return;
+        }
+
+        const severity = reportSeverity.value;
+        const category = reportCategory.value;
+        const description = reportDescription.value.trim();
+
+        try {
+            await apiCall('/danger-zones', {
+                method: 'POST',
+                body: JSON.stringify({
+                    latitude: currentPosition.latitude,
+                    longitude: currentPosition.longitude,
+                    severity,
+                    category,
+                    description
+                })
+            });
+
+            showNotification('Danger zone reported successfully', 'success');
+            const reportModal = document.getElementById('reportModal');
+            if (reportModal) {
+                reportModal.style.display = 'none';
+            }
+            if (reportDescription) {
+                reportDescription.value = '';
+            }
+        } catch (error) {
+            showNotification(error.message || 'Failed to report danger zone', 'error');
+        }
+    });
+}
+
+const closePanel = document.getElementById('closePanel');
+if (closePanel) {
+    closePanel.addEventListener('click', () => {
+        const intelligencePanel = document.getElementById('intelligencePanel');
+        if (intelligencePanel) {
+            intelligencePanel.style.display = 'none';
+        }
+    });
+}
+
+const menuBtn = document.getElementById('menuBtn');
+if (menuBtn) {
+    menuBtn.addEventListener('click', () => {
+        const sidebar = document.getElementById('sidebar');
+        if (sidebar) {
+            sidebar.classList.add('active');
+        }
+    });
+}
+
+const closeSidebar = document.getElementById('closeSidebar');
+if (closeSidebar) {
+    closeSidebar.addEventListener('click', () => {
+        const sidebar = document.getElementById('sidebar');
+        if (sidebar) {
+            sidebar.classList.remove('active');
+        }
+    });
+}
+
+// Clear old cache entries
+function clearOldCache() {
+    const now = Date.now();
+    let cleared = 0;
+    
+    for (const [key, value] of geocodeCache.entries()) {
+        const cacheDuration = key.includes('/autocomplete') ? AUTOCOMPLETE_CACHE_DURATION : CACHE_DURATION;
+        if (now - value.timestamp > cacheDuration) {
+            geocodeCache.delete(key);
+            cleared++;
+        }
     }
-});
-
-document.getElementById('startInput').addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-        findRoutes();
+    
+    if (cleared > 0) {
+        console.log(`Cleared ${cleared} old cache entries`);
     }
-});
-
-document.getElementById('destInput').addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-        findRoutes();
-    }
-});
-
-document.getElementById('locateBtn').addEventListener('click', () => {
-    if (currentPosition && userMarker) {
-        map.setView([currentPosition.latitude, currentPosition.longitude], 15);
-    }
-});
-
-document.getElementById('reportBtn').addEventListener('click', () => {
-    document.getElementById('reportModal').style.display = 'flex';
-});
-
-document.getElementById('closeReportModal').addEventListener('click', () => {
-    document.getElementById('reportModal').style.display = 'none';
-});
-
-document.getElementById('submitReportBtn').addEventListener('click', async () => {
-    if (!currentPosition) {
-        showNotification('Location not available', 'error');
-        return;
-    }
-
-    const severity = document.getElementById('reportSeverity').value;
-    const category = document.getElementById('reportCategory').value;
-    const description = document.getElementById('reportDescription').value.trim();
-
-    try {
-        await apiCall('/danger-zones', {
-            method: 'POST',
-            body: JSON.stringify({
-                latitude: currentPosition.latitude,
-                longitude: currentPosition.longitude,
-                severity,
-                category,
-                description
-            })
-        });
-
-        showNotification('Danger zone reported successfully', 'success');
-        document.getElementById('reportModal').style.display = 'none';
-        document.getElementById('reportDescription').value = '';
-    } catch (error) {
-        showNotification(error.message || 'Failed to report danger zone', 'error');
-    }
-});
-
-document.getElementById('closePanel').addEventListener('click', () => {
-    document.getElementById('intelligencePanel').style.display = 'none';
-});
-
-document.getElementById('menuBtn').addEventListener('click', () => {
-    document.getElementById('sidebar').classList.add('active');
-});
-
-document.getElementById('closeSidebar').addEventListener('click', () => {
-    document.getElementById('sidebar').classList.remove('active');
-});
+}
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     console.log('DOM loaded, initializing SafeTrace...');
+    
+    // Clear old cache entries on page load
+    clearOldCache();
+    setInterval(clearOldCache, 60 * 1000); // ✅ BUG 9 FIX: Evict stale cache entries every 60s
     
     // Check authentication
     const token = getToken();
@@ -1456,6 +2293,10 @@ document.addEventListener('DOMContentLoaded', () => {
     loadRouteHistory();
     loadAllDangerZones(); // Load verified danger zones on map
     setupLocationAutocomplete();
+    startProximityMonitoring(); // ✅ BUG 8 FIX: Start backup interval for proximity checks
+    
+    // ✅ BUG 1 FIX: Removed duplicate startLocationTracking() call
+    // initMap() already calls it internally - calling twice creates zombie watcher
     
     // Mobile-specific enhancements
     if (window.innerWidth <= 768) {
@@ -1553,7 +2394,7 @@ function setupSwipeableRoutes() {
         const x = e.touches[0].pageX - routesList.offsetLeft;
         const walk = (x - startX) * 2;
         routesList.scrollLeft = scrollLeft - walk;
-    });
+    }, { passive: false }); // ✅ BUG 18 FIX: Must be non-passive to allow preventDefault
     
     routesList.addEventListener('touchend', () => {
         isScrolling = false;
@@ -1580,6 +2421,7 @@ function setupPullToRefresh() {
     
     let startY = 0;
     let isPulling = false;
+    let refreshNotificationShown = false; // ✅ BUG 5 FIX: Only show once per pull gesture
     
     sidebar.addEventListener('touchstart', (e) => {
         if (sidebar.scrollTop === 0) {
@@ -1593,7 +2435,8 @@ function setupPullToRefresh() {
         const currentY = e.touches[0].clientY;
         const diff = currentY - startY;
         
-        if (diff > 80 && sidebar.scrollTop === 0) {
+        if (diff > 80 && sidebar.scrollTop === 0 && !refreshNotificationShown) {
+            refreshNotificationShown = true; // ✅ Show only once
             showNotification('Release to refresh', 'info');
         }
     });
@@ -1601,6 +2444,7 @@ function setupPullToRefresh() {
     sidebar.addEventListener('touchend', (e) => {
         if (!isPulling) return;
         isPulling = false;
+        refreshNotificationShown = false; // ✅ Reset for next pull gesture
         
         const currentY = e.changedTouches[0].clientY;
         const diff = currentY - startY;
@@ -1658,27 +2502,14 @@ function setupGestureControls() {
     }, { passive: true }); // Mark as passive
 }
 
-// Debounce helper
-function debounce(func, wait) {
-    let timeout;
-    return function executedFunction(...args) {
-        const later = () => {
-            clearTimeout(timeout);
-            func(...args);
-        };
-        clearTimeout(timeout);
-        timeout = setTimeout(later, wait);
-    };
-}
+// ✅ BUG 12 FIX: Removed duplicate debounce definition (first one is correct)
 
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {
     if (watchId) {
         navigator.geolocation.clearWatch(watchId);
     }
-    if (updateTimer) {
-        clearInterval(updateTimer);
-    }
+    // ✅ BUG 15 FIX: Removed updateTimer cleanup (variable never assigned)
 });
 
 
@@ -1712,25 +2543,29 @@ function checkDangerZoneProximity() {
     if (!userCurrentLocation || allDangerZones.length === 0) return;
 
     const { lat, lng } = userCurrentLocation;
-    const alertThreshold = 500; // Alert when within 500 meters
+    const alertThreshold = 500;
 
-    for (const zone of allDangerZones) {
+    // ✅ BUG 16 & 17 FIX: Sort by severity so critical zones always alert first
+    const severityOrder = { critical: 5, high: 4, medium: 3, low: 2, safe: 1 };
+    const sortedZones = [...allDangerZones].sort((a, b) =>
+        (severityOrder[b.risk_level || b.severity] || 0) - (severityOrder[a.risk_level || a.severity] || 0)
+    );
+
+    for (const zone of sortedZones) {
         const distance = calculateDistance(lat, lng, zone.latitude, zone.longitude);
-        const zoneRadius = zone.radius_meters || 200;
+        const zoneRadius = zone.radius_meters || zone.radius || 200;
         
-        // Check if within alert threshold or inside zone
+        // ✅ BUG 17 FIX: Use compound key so undefined id doesn't collapse all zones
+        const zoneKey = zone.id ?? `${zone.latitude}-${zone.longitude}-${zone.category}`;
+        
         if (distance <= (zoneRadius + alertThreshold)) {
-            // Only alert once per zone per session
-            if (!alertedZones.has(zone.id)) {
-                alertedZones.add(zone.id);
+            if (!alertedZones.has(zoneKey)) {
+                alertedZones.add(zoneKey);
                 showDangerZoneAlert(zone, distance);
-                break; // Show one alert at a time
+                break; // ✅ Safe to break — highest severity is now first
             }
-        } else {
-            // If user moves away, allow re-alerting if they come back
-            if (distance > (zoneRadius + alertThreshold + 200)) {
-                alertedZones.delete(zone.id);
-            }
+        } else if (distance > (zoneRadius + alertThreshold + 200)) {
+            alertedZones.delete(zoneKey); // Allow re-alert if user returns
         }
     }
 }
@@ -1817,7 +2652,8 @@ function showDangerZoneAlert(zone, distance) {
     const alertTitle = document.getElementById('dangerZoneAlertTitle');
     const alertSubtitle = document.getElementById('dangerZoneAlertSubtitle');
     
-    if (distance < zone.radius_meters) {
+    const zoneRadius = zone.radius_meters || zone.radius || 200; // ✅ BUG 7 FIX: Normalized
+    if (distance < zoneRadius) {
         alertTitle.textContent = '🚨 You Are In A Danger Zone';
         alertSubtitle.textContent = 'Exercise extreme caution';
     } else if (distance < 200) {
@@ -1838,7 +2674,14 @@ function showDangerZoneAlert(zone, distance) {
 // Play loud alert sound for danger zones
 function playAlertSound() {
     try {
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        // ✅ BUG 11 FIX: Reuse shared AudioContext
+        if (!sharedAudioContext || sharedAudioContext.state === 'closed') {
+            sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (sharedAudioContext.state === 'suspended') {
+            sharedAudioContext.resume();
+        }
+        const audioContext = sharedAudioContext;
         
         // Create a more urgent, louder alert sound
         // Play three beeps in succession
@@ -1898,12 +2741,14 @@ document.getElementById('continueAnyway')?.addEventListener('click', () => {
 
 document.getElementById('viewAlternativeRoute')?.addEventListener('click', () => {
     document.getElementById('dangerZoneAlertModal').style.display = 'none';
-    // Trigger route recalculation with danger zone avoidance
     if (routes && routes.length > 1) {
-        // Select the safest route
-        const safestRoute = routes.reduce((prev, current) => 
-            (prev.dangerZoneCount < current.dangerZoneCount) ? prev : current
-        );
+        // ✅ BUG 6 FIX: Use actual risk data instead of undefined dangerZoneCount
+        const severityScore = { safe: 0, low: 1, medium: 2, high: 3, critical: 4 };
+        const safestRoute = routes.reduce((prev, current) => {
+            const prevScore = severityScore[prev.risk?.riskLevel] ?? 99;
+            const currScore = severityScore[current.risk?.riskLevel] ?? 99;
+            return prevScore <= currScore ? prev : current;
+        });
         selectRoute(routes.indexOf(safestRoute));
         showNotification('Switched to safer route', 'success');
     } else {
@@ -1924,42 +2769,12 @@ function startProximityMonitoring() {
     checkDangerZoneProximity();
 }
 
-// Update user location and check proximity
-function updateUserLocation(lat, lng) {
+// Update proximity location and check danger zones
+function updateProximityLocation(lat, lng) {
     userCurrentLocation = { lat, lng };
     checkDangerZoneProximity();
 }
 
-// Store danger zones when loaded
-const originalDisplayDangerZones = displayDangerZones;
-displayDangerZones = function(zones) {
-    allDangerZones = zones || [];
-    originalDisplayDangerZones(zones);
-    
-    // Start monitoring if we have user location
-    if (userCurrentLocation) {
-        checkDangerZoneProximity();
-    }
-};
+// ✅ Removed monkey-patch - allDangerZones now stored directly in displayDangerZones()
 
-// Watch user location continuously
-if (navigator.geolocation) {
-    navigator.geolocation.watchPosition(
-        (position) => {
-            updateUserLocation(position.coords.latitude, position.coords.longitude);
-            
-            // Start monitoring if not already started
-            if (!proximityCheckInterval) {
-                startProximityMonitoring();
-            }
-        },
-        (error) => {
-            console.error('Location watch error:', error);
-        },
-        {
-            enableHighAccuracy: true,
-            maximumAge: 10000,
-            timeout: 5000
-        }
-    );
-}
+// ✅ Removed zombie watchPosition - location tracking handled by startHighAccuracyWatch()

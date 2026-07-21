@@ -1,6 +1,6 @@
 /**
- * SafeNex Onboarding – Phase 1
- * onboarding.js — Complete API integration, step navigation, UI logic
+ * SafeNex Onboarding – Phase 1 (Clerk Auth)
+ * onboarding.js — Clerk authentication + document verification + step navigation
  */
 
 'use strict';
@@ -18,6 +18,8 @@ const STATE = {
 };
 
 const API = '';  // Same origin — empty base URL
+const CLERK_PK = 'pk_test_b25lLXNhd2Zpc2gtMjQuY2xlcmsuYWNjb3VudHMuZGV2JA';
+let clerkInstance = null;
 
 /* ═══════════════════════════════════════════════════════════
    UTILITIES
@@ -78,8 +80,10 @@ function maskDocNumber(num) {
    STEP NAVIGATION
    ═══════════════════════════════════════════════════════════ */
 
-const STEP_IDS = ['step-1', 'step-2', 'step-3', 'step-4', 'step-processing', 'step-error'];
-const PROGRESS_MAP = { 1: 25, 2: 50, 3: 75, 4: 100 };
+// Step IDs: step-1 = Clerk SignIn, step-3 = Doc Upload, step-4 = ID Card
+// (step-2 was removed, step-3 and step-4 keep their original HTML IDs)
+const STEP_IDS = ['step-1', 'step-3', 'step-4', 'step-processing', 'step-error'];
+const PROGRESS_MAP = { 1: 33, 3: 66, 4: 100 };
 
 function showStep(stepIdOrNum) {
     const stepId = typeof stepIdOrNum === 'number' ? `step-${stepIdOrNum}` : stepIdOrNum;
@@ -100,15 +104,18 @@ function showStep(stepIdOrNum) {
     if (typeof stepIdOrNum === 'number') {
         STATE.currentStep = stepIdOrNum;
         const fill = $('progressFill');
-        if (fill) fill.style.width = `${PROGRESS_MAP[stepIdOrNum] || 25}%`;
+        if (fill) fill.style.width = `${PROGRESS_MAP[stepIdOrNum] || 33}%`;
 
-        // Update step labels
-        for (let i = 1; i <= 4; i++) {
+        // Update step labels (3-step flow: label-1=SignIn, label-2=Verify, label-3=IDCard)
+        // Map step numbers to label indices: step 1 -> label 1, step 3 -> label 2, step 4 -> label 3
+        const stepToLabel = { 1: 1, 3: 2, 4: 3 };
+        const activeLabel = stepToLabel[stepIdOrNum] || 1;
+        for (let i = 1; i <= 3; i++) {
             const lbl = $(`label-${i}`);
             if (!lbl) continue;
             lbl.classList.remove('active', 'completed');
-            if (i < stepIdOrNum) lbl.classList.add('completed');
-            else if (i === stepIdOrNum) lbl.classList.add('active');
+            if (i < activeLabel) lbl.classList.add('completed');
+            else if (i === activeLabel) lbl.classList.add('active');
         }
     }
 }
@@ -142,114 +149,163 @@ async function apiGet(endpoint) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   STEP 1 — REGISTER
+   STEP 1 — CLERK SIGN IN
    ═══════════════════════════════════════════════════════════ */
 
-function initRegisterForm() {
-    const form = $('registerForm');
-    const btn = $('registerBtn');
+async function initClerkAuth() {
+    try {
+        // Derive Clerk Frontend API domain from publishable key
+        const clerkDomain = atob(CLERK_PK.split('_')[2]).slice(0, -1);
 
-    form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        hideAlert('registerError');
+        // Load Clerk JS SDK from the account-specific CDN
+        await new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = `https://${clerkDomain}/npm/@clerk/clerk-js@latest/dist/clerk.browser.js`;
+            script.setAttribute('data-clerk-publishable-key', CLERK_PK);
+            script.async = true;
+            script.crossOrigin = 'anonymous';
+            script.onload = resolve;
+            script.onerror = () => reject(new Error('Failed to load Clerk SDK'));
+            document.head.appendChild(script);
+        });
 
-        const name = $('regName').value.trim();
-        const email = $('regEmail').value.trim();
-        const password = $('regPassword').value;
+        // Initialize Clerk via window.Clerk
+        const clerk = window.Clerk;
+        if (!clerk) throw new Error('Clerk SDK not found on window');
 
-        // Client-side validation
-        let hasError = false;
-        if (!name || name.length < 2) {
-            $('nameError').textContent = 'Please enter your full name.';
-            hasError = true;
-        } else { $('nameError').textContent = ''; }
+        await clerk.load();
+        clerkInstance = clerk;
 
-        if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
-            $('emailError').textContent = 'Please enter a valid email address.';
-            hasError = true;
-        } else { $('emailError').textContent = ''; }
-
-        if (!password || password.length < 8) {
-            $('passwordError').textContent = 'Password must be at least 8 characters.';
-            hasError = true;
-        } else { $('passwordError').textContent = ''; }
-
-        if (hasError) return;
-
-        setButtonLoading(btn, true);
-
-        try {
-            const data = await apiPost('/api/auth/register', { name, email, password });
-            STATE.token = data.token;
-            STATE.user = data.user;
-            localStorage.setItem('snx_token', data.token);
-            localStorage.setItem('snx_user', JSON.stringify(data.user));
-            showStep(3);  // Skip to doc upload — user is logged in fresh
-        } catch (err) {
-            showAlert('registerError', err.message || 'Registration failed. Please try again.');
-        } finally {
-            setButtonLoading(btn, false);
-        }
-    });
-
-    // Toggle "go to login"
-    $('goToLogin').addEventListener('click', () => showStep(2));
-}
-
-/* ═══════════════════════════════════════════════════════════
-   STEP 2 — LOGIN
-   ═══════════════════════════════════════════════════════════ */
-
-function initLoginForm() {
-    const form = $('loginForm');
-    const btn = $('loginBtn');
-
-    form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        hideAlert('loginError');
-
-        const email = $('loginEmail').value.trim();
-        const password = $('loginPassword').value;
-
-        if (!email || !password) {
-            showAlert('loginError', 'Please enter your email and password.');
+        // If already signed in via Clerk, sync with backend
+        if (clerk.user) {
+            await handleClerkSignedIn(clerk);
             return;
         }
 
-        setButtonLoading(btn, true);
+        // Function to render either SignIn or SignUp inline with SafeNex theme
+        function renderClerkAuth(mode = 'signIn') {
+            const signInDiv = $('clerk-sign-in');
+            if (!signInDiv) return;
 
-        try {
-            const data = await apiPost('/api/auth/login', { email, password });
-            STATE.token = data.token;
-            STATE.user = data.user;
-            localStorage.setItem('snx_token', data.token);
-            localStorage.setItem('snx_user', JSON.stringify(data.user));
+            // Unmount previous component if any
+            try { clerk.unmountSignIn(signInDiv); } catch (_) {}
+            try { clerk.unmountSignUp(signInDiv); } catch (_) {}
 
-            // If already verified, go straight to ID card
-            if (data.user.verified && data.user.safeNexID) {
-                STATE.verificationData = {
-                    safeNexID: data.user.safeNexID,
-                    qrCodeURL: data.user.qrCodePath
-                        ? `/qrcodes/${data.user.qrCodePath.split(/[\\/]/).pop()}`
-                        : null,
-                };
-                // Fetch full profile for display
-                try {
-                    const dash = await apiGet('/api/dashboard');
-                    renderIDCard(dash.user);
-                } catch (_) { }
-                showStep(4);
-            } else {
-                showStep(3);
+            // Update step header dynamically
+            const headerEl = $('step1Header');
+            const subEl = $('step1Sub');
+            if (headerEl && subEl) {
+                if (mode === 'signUp') {
+                    headerEl.textContent = 'Create Your Account';
+                    subEl.textContent = 'Sign up to begin your identity verification journey.';
+                } else {
+                    headerEl.textContent = 'Sign In to SafeNex';
+                    subEl.textContent = 'Sign in or create an account to begin your identity verification journey.';
+                }
             }
-        } catch (err) {
-            showAlert('loginError', err.message || 'Login failed. Please check your credentials.');
-        } finally {
-            setButtonLoading(btn, false);
-        }
-    });
 
-    $('goToRegister').addEventListener('click', () => showStep(1));
+            const appearance = {
+                variables: {
+                    colorPrimary: '#2563EB',
+                    colorDanger: '#ef4444',
+                    colorSuccess: '#22c55e',
+                    colorWarning: '#f59e0b',
+                    colorBackground: 'transparent',
+                    colorInputBackground: '#0B1530',
+                    colorInputText: '#ffffff',
+                    colorText: '#E2E8F0',
+                    colorTextSecondary: '#94A3B8',
+                    colorTextOnPrimaryBackground: '#ffffff',
+                    colorNeutral: '#ffffff',
+                    borderRadius: '0.875rem',
+                    fontFamily: "'Inter', system-ui, sans-serif",
+                },
+            };
+
+            if (mode === 'signUp') {
+                clerk.mountSignUp(signInDiv, {
+                    routing: 'virtual',
+                    signInUrl: '#signin',
+                    appearance,
+                });
+            } else {
+                clerk.mountSignIn(signInDiv, {
+                    routing: 'virtual',
+                    signUpUrl: '#signup',
+                    appearance,
+                });
+            }
+        }
+
+        // Render initial view based on current hash
+        const initialMode = window.location.hash === '#signup' ? 'signUp' : 'signIn';
+        renderClerkAuth(initialMode);
+
+        // Listen for hash changes to switch between SignIn and SignUp inline
+        window.addEventListener('hashchange', () => {
+            if (STATE.currentStep !== 1) return;
+            const mode = window.location.hash === '#signup' ? 'signUp' : 'signIn';
+            renderClerkAuth(mode);
+        });
+
+        // Listen for sign-in / sign-up completion
+        clerk.addListener(async ({ user }) => {
+            if (user) {
+                const signInDiv = $('clerk-sign-in');
+                if (signInDiv) {
+                    try { clerk.unmountSignIn(signInDiv); } catch (_) {}
+                    try { clerk.unmountSignUp(signInDiv); } catch (_) {}
+                }
+                await handleClerkSignedIn(clerk);
+            }
+        });
+
+    } catch (err) {
+        console.error('[Clerk] Init failed:', err);
+        showAlert('clerkError', 'Failed to load authentication. Please refresh the page.');
+    }
+}
+
+/** After Clerk sign-in: sync with backend to get JWT, then proceed */
+async function handleClerkSignedIn(clerk) {
+    const clerkUser = clerk.user;
+    const email = clerkUser.primaryEmailAddress?.emailAddress || '';
+    const name = clerkUser.fullName || clerkUser.firstName || 'SafeNex User';
+
+    try {
+        // Sync with backend to get JWT token
+        const data = await apiPost('/api/auth/clerk-sync', {
+            clerkUserId: clerkUser.id,
+            name,
+            email,
+        });
+
+        STATE.token = data.token;
+        STATE.user = data.user;
+        localStorage.setItem('snx_token', data.token);
+        localStorage.setItem('snx_user', JSON.stringify(data.user));
+
+        // If already verified, go straight to ID card or dashboard
+        if (data.user.verified && data.user.safeNexID) {
+            STATE.verificationData = {
+                safeNexID: data.user.safeNexID,
+                qrCodeURL: data.user.qrCodePath
+                    ? `/qrcodes/${data.user.qrCodePath.split(/[\\/]/).pop()}`
+                    : null,
+            };
+            try {
+                const dash = await apiGet('/api/dashboard');
+                renderIDCard(dash.user);
+            } catch (_) { }
+            showStep(4);
+        } else {
+            // Not verified — go to document upload
+            showStep(3);
+        }
+    } catch (err) {
+        console.error('[Clerk Sync]', err);
+        showAlert('clerkError', err.message || 'Failed to sync account. Please try again.');
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -549,20 +605,19 @@ async function resumeSession() {
    ═══════════════════════════════════════════════════════════ */
 
 document.addEventListener('DOMContentLoaded', async () => {
-    // Init all form sections
-    initRegisterForm();
-    initLoginForm();
+    // Init remaining form sections
     initDocumentUpload();
     initIDCardActions();
     initPasswordToggles();
     initMissionCarousel();
 
-    // Try to resume existing session
+    // Try to resume existing JWT session first
     const resumed = await resumeSession();
 
-    // If no resumed session, start at step 1 (already shown by CSS .active on step-1)
+    // If no resumed session, init Clerk auth at step 1
     if (!resumed) {
         showStep(1);
+        await initClerkAuth();
     }
 });
 

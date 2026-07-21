@@ -2477,3 +2477,490 @@ body {
         justify-content: flex-start;
     }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   LIVE TRACKING COMMAND CENTER
+   ═══════════════════════════════════════════════════════════ */
+
+.badge-success {
+    background: rgba(16, 185, 129, 0.25) !important;
+    color: #10B981 !important;
+}
+
+/* Section header override for Live Tracking */
+.lt-section-header {
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.lt-subtitle {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.lt-header-stats {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.lt-live-pill {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #10B981;
+}
+
+.lt-live-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #10B981;
+    box-shadow: 0 0 8px #10B981;
+    animation: pulse 1.5s infinite;
+}
+
+.lt-danger-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--red);
+}
+
+/* ── Main layout: side by side ── */
+.lt-layout {
+    display: grid;
+    grid-template-columns: 1fr 360px;
+    gap: 16px;
+    height: calc(100vh - 220px);
+    min-height: 500px;
+}
+
+/* ── Map Panel ── */
+.lt-map-panel {
+    position: relative;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+#ltMap {
+    flex: 1;
+    min-height: 400px;
+    background: #080f1f;
+}
+
+.lt-map-controls {
+    display: flex;
+    gap: 6px;
+    padding: 10px;
+    background: rgba(10, 14, 26, 0.8);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+}
+
+.lt-ctrl-btn {
+    padding: 6px 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.lt-ctrl-btn:hover,
+.lt-ctrl-btn.active {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: rgba(16, 185, 129, 0.4);
+    color: #10B981;
+}
+
+.lt-map-empty {
+    position: absolute;
+    inset: 60px 0 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--text-muted);
+    pointer-events: none;
+    z-index: 500;
+    background: rgba(10, 14, 26, 0.75);
+    text-align: center;
+    padding: 20px;
+}
+
+.lt-map-empty-icon {
+    font-size: 36px;
+    margin-bottom: 4px;
+}
+
+/* ── User List Panel ── */
+.lt-list-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.lt-list-search {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.lt-list-search .search-input {
+    width: 100%;
+}
+
+/* ── Tabs ── */
+.lt-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 0 8px;
+}
+
+.lt-tab {
+    flex: 1;
+    padding: 10px 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-bottom: -1px;
+    text-align: center;
+}
+
+.lt-tab:hover {
+    color: var(--text);
+}
+
+.lt-tab.active {
+    color: #10B981;
+    border-bottom-color: #10B981;
+}
+
+/* ── User List ── */
+.lt-user-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.lt-empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 32px;
+    color: var(--text-muted);
+    text-align: center;
+    font-size: 14px;
+}
+
+/* ── Individual User Row ── */
+.lt-user-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.2s;
+    cursor: pointer;
+}
+
+.lt-user-row:hover {
+    background: var(--bg-secondary);
+}
+
+.lt-user-row.in-danger {
+    border-left: 3px solid var(--red);
+    background: rgba(239, 68, 68, 0.04);
+}
+
+.lt-user-row.in-danger:hover {
+    background: rgba(239, 68, 68, 0.08);
+}
+
+/* Selected user card — highlighted when admin clicks View */
+.lt-user-row--selected {
+    border-left: 3px solid #10B981 !important;
+    background: rgba(16, 185, 129, 0.06) !important;
+    box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.2);
+}
+.lt-user-row--selected:hover {
+    background: rgba(16, 185, 129, 0.1) !important;
+}
+
+.lt-user-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.lt-user-dot--safe {
+    background: #10B981;
+    box-shadow: 0 0 5px #10B981;
+}
+
+.lt-user-dot--danger {
+    background: var(--red);
+    box-shadow: 0 0 5px var(--red);
+    animation: pulse 1.2s infinite;
+}
+
+.lt-user-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.lt-user-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.lt-user-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.lt-user-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.lt-user-btn {
+    padding: 4px 8px;
+    font-size: 10px;
+    font-weight: 600;
+    border-radius: 5px;
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.lt-user-btn--view {
+    background: rgba(59, 130, 246, 0.2);
+    color: var(--blue);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.lt-user-btn--view:hover {
+    background: rgba(59, 130, 246, 0.4);
+}
+
+.lt-user-btn--history {
+    background: rgba(100, 116, 139, 0.15);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+}
+
+.lt-user-btn--history:hover {
+    background: rgba(100, 116, 139, 0.3);
+    color: var(--text);
+}
+
+/* ── Danger Zone Alert Toast ── */
+.lt-toast-container {
+    position: fixed;
+    top: 80px;
+    right: 24px;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none;
+}
+
+.lt-toast {
+    background: var(--bg-card);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    border-left: 4px solid var(--red);
+    border-radius: 10px;
+    padding: 14px 16px;
+    min-width: 280px;
+    max-width: 340px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    pointer-events: all;
+    animation: lt-toast-in 0.3s ease;
+}
+
+@keyframes lt-toast-in {
+    from { opacity: 0; transform: translateX(40px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+
+.lt-toast-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--red);
+    margin-bottom: 4px;
+}
+
+.lt-toast-body {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.lt-toast-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.lt-toast-btn {
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: opacity 0.2s;
+}
+
+.lt-toast-btn:hover { opacity: 0.8; }
+
+.lt-toast-btn--view {
+    background: rgba(59, 130, 246, 0.25);
+    color: var(--blue);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.lt-toast-btn--dismiss {
+    background: rgba(100, 116, 139, 0.15);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+}
+
+/* ── Leaflet map dark override ── */
+.leaflet-container {
+    background: #080f1f !important;
+    font-family: 'Inter', sans-serif !important;
+}
+.leaflet-tile {
+    filter: brightness(0.8) saturate(0.7);
+}
+.leaflet-control-zoom {
+    border: 1px solid rgba(255,255,255,0.1) !important;
+}
+.leaflet-control-zoom a {
+    background: var(--bg-card) !important;
+    color: var(--text) !important;
+    border-color: var(--border) !important;
+}
+.leaflet-control-zoom a:hover {
+    background: var(--bg-secondary) !important;
+}
+.leaflet-popup-content-wrapper {
+    background: var(--bg-card) !important;
+    color: var(--text) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 10px !important;
+}
+.leaflet-popup-tip {
+    background: var(--bg-card) !important;
+}
+
+/* ── Admin user pins ── */
+.lt-admin-pin {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 3px solid #fff;
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.6);
+    animation: ltPinPulse 2s ease-in-out infinite;
+}
+
+.lt-admin-pin.danger {
+    background: var(--red);
+    box-shadow: 0 0 12px rgba(239, 68, 68, 0.8);
+}
+
+@keyframes ltPinPulse {
+    0%, 100% { box-shadow: 0 0 8px rgba(16, 185, 129, 0.5); }
+    50%       { box-shadow: 0 0 18px rgba(16, 185, 129, 0.9); }
+}
+
+/* ── Responsive ── */
+@media (max-width: 1100px) {
+    .lt-layout {
+        grid-template-columns: 1fr;
+        height: auto;
+    }
+    #ltMap { height: 350px; }
+    .lt-list-panel { height: 400px; }
+}
+
+
+/* ── Back to Overview Button (Focused Mode) ── */
+.lt-back-btn {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    z-index: 1000;
+    padding: 10px 18px;
+    background: rgba(10, 14, 26, 0.95);
+    border: 1px solid rgba(139, 92, 246, 0.4);
+    border-radius: 8px;
+    color: #8B5CF6;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.lt-back-btn:hover {
+    background: rgba(139, 92, 246, 0.15);
+    border-color: #8B5CF6;
+    transform: translateX(-2px);
+    box-shadow: 0 6px 16px rgba(139, 92, 246, 0.4);
+}
+
+.lt-back-btn:active {
+    transform: translateX(-1px) scale(0.98);
+}

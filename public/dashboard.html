@@ -17,19 +17,7 @@
         <div class="nav__inner">
             <a href="/dashboard" class="nav__brand">
                 <div class="nav__logo">
-                    <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M20 2L4 9v12c0 9.4 6.8 18.2 16 20 9.2-1.8 16-10.6 16-20V9L20 2z"
-                            fill="url(#nav-shield)" />
-                        <path d="M15 19.5l3.5 3.5 6.5-7" stroke="#fff" stroke-width="2.5" stroke-linecap="round"
-                            stroke-linejoin="round" />
-                        <defs>
-                            <linearGradient id="nav-shield" x1="4" y1="2" x2="36" y2="41"
-                                gradientUnits="userSpaceOnUse">
-                                <stop stop-color="#2563EB" />
-                                <stop offset="1" stop-color="#06B6D4" />
-                            </linearGradient>
-                        </defs>
-                    </svg>
+                    <img src="/logosaf.png" alt="SafeNex Logo" style="width:36px;height:36px;object-fit:contain;" />
                 </div>
                 <div>
                     <span class="nav__name">SafeNex</span>
@@ -122,6 +110,28 @@
         </div>
     </nav>
 
+    <!-- ░░ LIVE TELEMETRY BAR ░░ -->
+    <div class="telemetry-bar">
+        <div class="telemetry-bar__inner">
+            <div class="telemetry-item">
+                <span class="telemetry-dot"></span>
+                <span class="telemetry-label">NETWORK:</span>
+                <span class="telemetry-val">SAFE-NEX CYBER-NODE 01</span>
+            </div>
+            <div class="telemetry-item">
+                <span class="telemetry-label">LATENCY:</span>
+                <span class="telemetry-val">1.2 MS</span>
+            </div>
+            <div class="telemetry-item telemetry-item--highlight">
+                <span class="telemetry-label">STATUS:</span>
+                <span class="telemetry-val">ALL URBAN ZONES PROTECTED</span>
+            </div>
+            <div class="telemetry-item telemetry-item--time">
+                <span id="liveTelemetryTime">REALTIME ENCRYPTED</span>
+            </div>
+        </div>
+    </div>
+
     <!-- ░░ MAIN ░░ -->
     <main class="main" id="overview">
 
@@ -137,7 +147,24 @@
                     <span class="gradient-text">Intelligence</span><br />
                     System
                 </h1>
-                <p class="hero__sub">Your AI-powered safety network is active. Real-time protection across all urban zones.</p>
+                <p class="hero__sub">Your AI-powered safety network is active. Real-time threat detection and instant emergency routing across all urban zones.</p>
+
+                <!-- Quick Action Command Dock -->
+                <div class="hero-quick-dock">
+                    <button class="quick-dock-btn quick-dock-btn--sos" onclick="window.location.href='/sos-redesign.html'">
+                        <svg viewBox="0 0 24 24" fill="none"><path d="M12 9v4M12 17h.01" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="currentColor" stroke-width="1.5"/></svg>
+                        Quick SOS
+                    </button>
+                    <button class="quick-dock-btn quick-dock-btn--trace" onclick="window.location.href='/safetrace'">
+                        <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2z" stroke="currentColor" stroke-width="1.5"/><path d="M12 6v2M12 16v2M6 12H4M20 12h-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                        SafeTrace Route
+                    </button>
+                    <button class="quick-dock-btn quick-dock-btn--id" id="quickIdBtn" onclick="document.getElementById('viewIdBtn').click()">
+                        <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M7 9h10M7 13h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                        Identity Card
+                    </button>
+                </div>
+
                 <div class="stats-row">
                     <div class="stat-card">
                         <span class="stat-card__label">SAFETY INDEX</span>
@@ -162,6 +189,7 @@
                     </div>
                 </div>
             </div>
+
             <div class="radar-wrap" aria-hidden="true">
                 <div class="radar">
                     <div class="radar__ring radar__ring--1"></div>
@@ -182,142 +210,260 @@
             </div>
         </section>
 
-        <!-- ACTIVE MODULES -->
-        <section class="section modules-section" id="modules" aria-label="Active Modules">
+        <!-- ░░ TACTICAL CYBER COMMAND DECK MATRIX ░░ -->
+        <section class="section modules-section" id="modules" aria-label="Tactical Safety Modules">
             <div class="section__header">
-                <h2 class="section__title">ACTIVE MODULES</h2>
+                <div>
+                    <h2 class="section__title">TACTICAL SAFETY MODULES</h2>
+                    <span class="hud-sub-tag">[ SAFENEX TACTICAL DECK v2.4 ]</span>
+                </div>
                 <div class="modules-header-meta">
-                    <span class="modules-online-count"><span id="onlineCount">3</span> of 3 Online</span>
+                    <div class="hud-filter-bar">
+                        <span class="hud-filter hud-filter--active">ALL NODES</span>
+                        <span class="hud-filter">LIVE (3)</span>
+                    </div>
                 </div>
             </div>
 
-            <div class="modules-grid-v2">
+            <!-- Cyber HUD Frame Outer Container -->
+            <div class="tactical-deck-frame">
+                <!-- Glowing HUD Corner Crosshairs -->
+                <div class="hud-corner hud-corner--tl" aria-hidden="true">+</div>
+                <div class="hud-corner hud-corner--tr" aria-hidden="true">+</div>
+                <div class="hud-corner hud-corner--bl" aria-hidden="true">+</div>
+                <div class="hud-corner hud-corner--br" aria-hidden="true">+</div>
 
-                <!-- SafeTrace -->
-                <article class="mod-card mod-card--blue" tabindex="0" role="button" aria-label="SafeTrace module — Online. Launch to open.">
-                    <div class="mod-card__bg-glow" aria-hidden="true"></div>
-                    <div class="mod-card__inner">
-                        <div class="mod-card__top">
-                            <div class="mod-card__icon mod-card__icon--blue">
-                                <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2z" stroke="currentColor" stroke-width="1.5"/><path d="M12 6v2M12 16v2M6 12H4M20 12h-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                <div class="tactical-grid">
+
+                    <!-- NODE 01: SafeTrace (Navigation HUD) -->
+                    <article class="tac-card tac-card--blue" tabindex="0" role="button" aria-label="SafeTrace Tactical Navigation — Online">
+                        <div class="tac-card__index">[ NODE 01 ]</div>
+                        <div class="tac-card__glow" aria-hidden="true"></div>
+
+                        <div class="tac-card__head">
+                            <div class="tac-card__icon tac-card__icon--blue">
+                                <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2z" stroke="currentColor" stroke-width="1.8"/><path d="M12 6v2M12 16v2M6 12H4M20 12h-2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                             </div>
-                            <span class="mod-badge mod-badge--online">
-                                <span class="mod-badge__dot"></span>ONLINE
-                            </span>
-                        </div>
-
-                        <h3 class="mod-card__title">SafeTrace</h3>
-                        <p class="mod-card__desc">Risk-aware route navigation across active urban zones using live threat data.</p>
-
-                        <div class="mod-card__stats">
-                            <div class="mod-stat">
-                                <svg viewBox="0 0 24 24" fill="none"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="9" r="2.5" stroke="currentColor" stroke-width="1.5"/></svg>
-                                <span>3 Active Zones</span>
-                            </div>
-                            <div class="mod-stat">
-                                <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M12 8v4l3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                                <span>Live Updates</span>
+                            <div class="tac-card__title-group">
+                                <h3 class="tac-card__title">SafeTrace</h3>
+                                <span class="tac-badge tac-badge--blue">ROUTE AI &middot; 95% SAFE</span>
                             </div>
                         </div>
 
-                        <div class="mod-card__progress">
-                            <div class="mod-card__progress-label"><span>Route Safety Score</span><span>94%</span></div>
-                            <div class="mod-card__bar"><div class="mod-card__bar-fill mod-card__bar-fill--blue" style="width:94%"></div></div>
+                        <!-- Tactical Interactive Map Route Canvas -->
+                        <div class="tac-hud-box tac-hud-box--route">
+                            <div class="route-hud-header">
+                                <span>LIVE POLYLINE RADAR</span>
+                                <span style="color:var(--cyan);font-weight:700">14 ZONES</span>
+                            </div>
+                            <div class="route-hud-visual">
+                                <svg viewBox="0 0 240 50" fill="none" preserveAspectRatio="none">
+                                    <path d="M10 35 Q 60 5, 120 30 T 230 15" stroke="rgba(37,99,235,0.25)" stroke-width="5"/>
+                                    <path d="M10 35 Q 60 5, 120 30 T 230 15" stroke="url(#tac-route-grad)" stroke-width="3" stroke-linecap="round"/>
+                                    <circle cx="10" cy="35" r="5" fill="#2563EB" />
+                                    <circle cx="120" cy="30" r="4" fill="#06B6D4" />
+                                    <circle cx="230" cy="15" r="5" fill="#22C55E" />
+                                    <defs>
+                                        <linearGradient id="tac-route-grad" x1="0" y1="0" x2="1" y2="0">
+                                            <stop offset="0%" stop-color="#2563EB"/>
+                                            <stop offset="50%" stop-color="#06B6D4"/>
+                                            <stop offset="100%" stop-color="#22C55E"/>
+                                        </linearGradient>
+                                    </defs>
+                                </svg>
+                            </div>
                         </div>
 
-                        <button class="mod-card__btn mod-card__btn--blue" aria-label="Launch SafeTrace module">
+                        <p class="tac-card__desc">Risk-aware navigation routing using live threat telemetry and predictive incident scores.</p>
+
+                        <button class="tac-btn tac-btn--blue" onclick="window.location.href='/safetrace'">
                             <svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                            Launch SafeTrace
+                            Launch Navigation
                         </button>
-                    </div>
-                </article>
+                    </article>
 
-                <!-- Silent Room -->
-                <article class="mod-card mod-card--cyan" tabindex="0" role="button" aria-label="Silent Room module — Online. Enter to open.">
-                    <div class="mod-card__bg-glow" aria-hidden="true"></div>
-                    <div class="mod-card__inner">
-                        <div class="mod-card__top">
-                            <div class="mod-card__icon mod-card__icon--cyan">
-                                <svg viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                    <!-- NODE 02: Nexa AI SOS (HERO FEATURED CORE) -->
+                    <article class="tac-card tac-card--hero-sos" tabindex="0" role="button" aria-label="Nexa AI SOS — Critical Command Core">
+                        <div class="tac-card__index tac-card__index--sos">[ CRITICAL CORE 02 ]</div>
+                        <div class="tac-card__glow tac-card__glow--sos" aria-hidden="true"></div>
+
+                        <div class="tac-card__head">
+                            <div class="tac-card__icon tac-card__icon--red">
+                                <svg viewBox="0 0 24 24" fill="none"><path d="M12 9v4M12 17h.01" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
                             </div>
-                            <span class="mod-badge mod-badge--online">
-                                <span class="mod-badge__dot"></span>ONLINE
-                            </span>
-                        </div>
-
-                        <h3 class="mod-card__title">Silent Room</h3>
-                        <p class="mod-card__desc">Community safety reporting hub with acoustic anomaly detection and silent alerts.</p>
-
-                        <div class="mod-card__stats">
-                            <div class="mod-stat">
-                                <svg viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="1.5"/></svg>
-                                <span>12 Reports Today</span>
-                            </div>
-                            <div class="mod-stat">
-                                <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/><path d="M12 8v4l3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-                                <span>Real-time Feed</span>
+                            <div class="tac-card__title-group">
+                                <h3 class="tac-card__title" style="color:#F87171">Nexa AI SOS</h3>
+                                <span class="tac-badge tac-badge--red" id="sosStatusBadge"><span class="mod-badge__dot"></span>ONLINE &middot; DISPATCH READY</span>
                             </div>
                         </div>
 
-                        <div class="mod-card__progress">
-                            <div class="mod-card__progress-label"><span>Community Trust</span><span>87%</span></div>
-                            <div class="mod-card__bar"><div class="mod-card__bar-fill mod-card__bar-fill--cyan" style="width:87%"></div></div>
+                        <!-- Emergency Sonar Beacon Dial -->
+                        <div class="tac-hud-box tac-hud-box--sos">
+                            <div class="sos-hud-flex">
+                                <div class="sos-beacon-ring">
+                                    <div class="beacon-pulse-dot"></div>
+                                </div>
+                                <div class="sos-hud-info">
+                                    <span class="sos-hud-title">INSTANT RESPONDER DISPATCH</span>
+                                    <span class="sos-hud-timer">&lt; 3.0 SECONDS RESPONSE</span>
+                                </div>
+                            </div>
                         </div>
 
-                        <button class="mod-card__btn mod-card__btn--cyan" aria-label="Enter Silent Room module">
+                        <p class="tac-card__desc">AI emergency detection — broadcasts live location, audio distress pings, and dispatches emergency contacts.</p>
+
+                        <button class="tac-btn tac-btn--sos" onclick="window.location.href='/sos-redesign.html'">
+                            <svg viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            ACTIVATE SOS NOW
+                        </button>
+                    </article>
+
+                    <!-- NODE 03: Silent Room (Acoustic Spectrum HUD) -->
+                    <article class="tac-card tac-card--cyan" tabindex="0" role="button" aria-label="Silent Room — Acoustic Reporting HUD">
+                        <div class="tac-card__index">[ NODE 03 ]</div>
+                        <div class="tac-card__glow" aria-hidden="true"></div>
+
+                        <div class="tac-card__head">
+                            <div class="tac-card__icon tac-card__icon--cyan">
+                                <svg viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                            </div>
+                            <div class="tac-card__title-group">
+                                <h3 class="tac-card__title">Silent Room</h3>
+                                <span class="tac-badge tac-badge--cyan">ACOUSTIC AI &middot; ANONYMOUS</span>
+                            </div>
+                        </div>
+
+                        <!-- Audio Spectrum Graph Widget -->
+                        <div class="tac-hud-box tac-hud-box--audio">
+                            <div class="audio-spectrum-bar">
+                                <span class="spec-bar"></span>
+                                <span class="spec-bar"></span>
+                                <span class="spec-bar"></span>
+                                <span class="spec-bar"></span>
+                                <span class="spec-bar"></span>
+                                <span class="spec-bar"></span>
+                                <span class="spec-bar"></span>
+                                <span class="spec-bar"></span>
+                                <span class="spec-bar"></span>
+                                <span class="spec-bar"></span>
+                            </div>
+                            <span class="db-meter">32 dB &middot; QUIET ZONE</span>
+                        </div>
+
+                        <p class="tac-card__desc">Anonymous community safety reporting hub integrated with real-time acoustic sound anomaly detection.</p>
+
+                        <button class="tac-btn tac-btn--cyan" onclick="window.location.href='/silentroom'">
                             <svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                             Enter Silent Room
                         </button>
-                    </div>
-                </article>
+                    </article>
 
-                <!-- Nexa AI SOS -->
-                <article class="mod-card mod-card--red mod-card--sos" tabindex="0" role="button" aria-label="Nexa AI SOS — Online. Activate for emergency.">
-                    <div class="mod-card__bg-glow" aria-hidden="true"></div>
-                    <div class="mod-card__inner">
-                        <div class="mod-card__top">
-                            <div class="mod-card__icon mod-card__icon--red">
-                                <svg viewBox="0 0 24 24" fill="none"><path d="M12 9v4M12 17h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    <!-- NODE 04: Track Me (Satellite GPS Beacon HUD) -->
+                    <article class="tac-card tac-card--green" tabindex="0" role="button" onclick="window.location.href='/trackme'" aria-label="Track Me — Live GPS Satellite HUD">
+                        <div class="tac-card__index">[ NODE 04 ]</div>
+                        <div class="tac-card__glow" aria-hidden="true"></div>
+
+                        <div class="tac-card__head">
+                            <div class="tac-card__icon tac-card__icon--green">
+                                <svg viewBox="0 0 24 24" fill="none"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="9" r="2.5" stroke="currentColor" stroke-width="1.8"/></svg>
                             </div>
-                            <span class="mod-badge mod-badge--online" id="sosStatusBadge">
-                                <span class="mod-badge__dot"></span>ONLINE
-                            </span>
-                        </div>
-
-                        <h3 class="mod-card__title">Nexa AI SOS</h3>
-                        <p class="mod-card__desc">AI-powered emergency detection — broadcasts your location and triggers instant response.</p>
-
-                        <div class="mod-card__stats">
-                            <div class="mod-stat">
-                                <svg viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                                <span>Response &lt; 3 sec</span>
-                            </div>
-                            <div class="mod-stat">
-                                <svg viewBox="0 0 24 24" fill="none"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.8 19.8 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.8 19.8 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.8 12.8 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.8 12.8 0 002.81.7A2 2 0 0122 16.92z" stroke="currentColor" stroke-width="1.5"/></svg>
-                                <span>Auto-Alert Contacts</span>
+                            <div class="tac-card__title-group">
+                                <h3 class="tac-card__title">Track Me</h3>
+                                <span class="tac-badge tac-badge--green">LIVE SATELLITE BEACON</span>
                             </div>
                         </div>
 
-                        <div class="mod-card__sos-pulse" aria-hidden="true">
-                            <div class="mod-card__sos-ring mod-card__sos-ring--1"></div>
-                            <div class="mod-card__sos-ring mod-card__sos-ring--2"></div>
-                            <div class="mod-card__sos-ring mod-card__sos-ring--3"></div>
+                        <!-- Satellite GPS Radar Target Widget -->
+                        <div class="tac-hud-box tac-hud-box--gps">
+                            <div class="sat-gps-hud">
+                                <div class="sat-crosshair"></div>
+                                <span class="sat-coords">LAT 19.0760° N &middot; LNG 72.8777° E</span>
+                            </div>
                         </div>
 
-                        <button class="mod-card__btn mod-card__btn--sos" aria-label="Activate Nexa AI SOS emergency system">
-                            <svg viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                            Activate SOS
+                        <p class="tac-card__desc">Voluntary live location sharing with SafeNex authority control nodes and verified contacts.</p>
+
+                        <button class="tac-btn tac-btn--green" onclick="window.location.href='/trackme'">
+                            <svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            Start Live Tracking
                         </button>
-                    </div>
-                </article>
+                    </article>
 
+                </div>
             </div>
         </section>
 
 
+
+        <!-- ░░ CYBER THREAT & AI ENGINE OVERVIEW ░░ -->
+        <section class="section intel-section" aria-label="Urban Threat Intelligence">
+            <div class="section__header">
+                <h2 class="section__title">URBAN THREAT INTELLIGENCE &amp; AI ENGINE</h2>
+                <span class="intel-status-pill">AI ENCLAVE OPTIMAL</span>
+            </div>
+
+            <div class="intel-grid">
+                <!-- Threat Index Tile -->
+                <div class="intel-card intel-card--map">
+                    <div class="intel-card__header">
+                        <span class="intel-card__tag">LIVE RADAR SCOPE</span>
+                        <span class="intel-card__coords">19.0760° N, 72.8777° E</span>
+                    </div>
+                    <div class="intel-card__body">
+                        <div class="intel-metric">
+                            <span class="intel-metric__val">98.4<small>%</small></span>
+                            <span class="intel-metric__sub">Zone Safety Score</span>
+                        </div>
+                        <div class="intel-details">
+                            <div class="intel-detail-row">
+                                <span>Monitored High Risk Zones:</span>
+                                <strong style="color:var(--yellow)">2 Active (Low Threat)</strong>
+                            </div>
+                            <div class="intel-detail-row">
+                                <span>Realtime Safety Mesh:</span>
+                                <strong style="color:var(--green)">100% Operational</strong>
+                            </div>
+                            <div class="intel-detail-row">
+                                <span>GPS Refresh Rate:</span>
+                                <strong style="color:var(--cyan)">Every 5 Seconds</strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- AI Neural Readiness Tile -->
+                <div class="intel-card intel-card--ai">
+                    <div class="intel-card__header">
+                        <span class="intel-card__tag">AI NEURAL READINESS</span>
+                        <span class="intel-card__pulse"></span>
+                    </div>
+                    <div class="intel-card__body">
+                        <div class="intel-metric">
+                            <span class="intel-metric__val">&lt; 1.2<small>ms</small></span>
+                            <span class="intel-metric__sub">Threat Response Latency</span>
+                        </div>
+                        <div class="intel-details">
+                            <div class="intel-detail-row">
+                                <span>Audio Distress Engine:</span>
+                                <strong style="color:var(--green)">Listening (Standby)</strong>
+                            </div>
+                            <div class="intel-detail-row">
+                                <span>Emergency Dispatch:</span>
+                                <strong style="color:var(--cyan)">Synced (2 Contacts)</strong>
+                            </div>
+                            <div class="intel-detail-row">
+                                <span>Acoustic Pattern Scanner:</span>
+                                <strong style="color:var(--white)">Active &amp; Calibrated</strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <!-- SYSTEM STATUS -->
         <div id="identity">
-<section class="system-panel">
+            <section class="system-panel">
                 <div class="section__header">
                     <h2 class="section__title">SYSTEM STATUS</h2>
                     <span class="live-badge">● LIVE</span>
@@ -486,6 +632,27 @@
     <!-- Toast -->
     <div class="toast" id="toast" role="alert" aria-live="polite"></div>
 
+    <!-- ░░ MOBILE FLOATING QUICK DOCK ░░ -->
+    <div class="mobile-bottom-dock" aria-label="Quick Navigation">
+        <a href="/sos-redesign.html" class="mb-dock-item mb-dock-item--sos">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 9v4M12 17h.01" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="currentColor" stroke-width="1.5"/></svg>
+            <span>SOS</span>
+        </a>
+        <a href="/safetrace" class="mb-dock-item">
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2z" stroke="currentColor" stroke-width="1.5"/></svg>
+            <span>SafeTrace</span>
+        </a>
+        <a href="/silentroom" class="mb-dock-item">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="currentColor" stroke-width="1.5"/></svg>
+            <span>Silent Room</span>
+        </a>
+        <button class="mb-dock-item" onclick="document.getElementById('viewIdBtn').click()">
+            <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M7 9h10M7 13h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <span>ID Card</span>
+        </button>
+    </div>
+
+    <script src="trackme-bg.js"></script>
     <script src="dashboard.js"></script>
 </body>
 

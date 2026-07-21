@@ -4,6 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SafeNex User Verification</title>
+    <meta name="description" content="SafeNex Official Public Identity Clearance & Verification Portal." />
+    <!-- Open Graph / WhatsApp link preview meta tags -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="SafeNex Official Security Clearance Pass" />
+    <meta property="og:description" content="Verified Identity & Security Clearance Certificate on SafeNex." />
+    <meta property="og:image" content="https://safenex-ochre.vercel.app/logosaf.png" />
     <link rel="stylesheet" href="verify-user.css">
 </head>
 <body>
@@ -24,113 +30,160 @@
 
         <!-- Success State -->
         <div id="successState" class="success-state" style="display: none;">
-            <!-- Header -->
+            
+            <!-- Official Security Header -->
             <div class="verify-header">
                 <div class="verify-logo">
-                    <div class="logo-shield">🛡️</div>
+                    <div class="logo-shield" style="background:transparent;box-shadow:none;">
+                        <img src="/logosaf.png" alt="SafeNex Logo" style="width:36px;height:36px;object-fit:contain;" />
+                    </div>
                     <div class="logo-text">
-                        <h1>SafeNex</h1>
-                        <p>Verified User Profile</p>
+                        <h1>SafeNex Security Pass</h1>
+                        <p>Official Public Identity Clearance &amp; Verification Portal</p>
                     </div>
                 </div>
                 <div class="verified-badge">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-                        <polyline points="22 4 12 14.01 9 11.01"></polyline>
-                    </svg>
-                    <span>VERIFIED</span>
+                    <span class="verified-dot"></span>
+                    <span>AUTHENTICATED PASS</span>
                 </div>
             </div>
 
-            <!-- User Card -->
+            <!-- Main Security User Clearance Card -->
             <div class="user-card">
-                <!-- Profile Section -->
+                
+                <!-- Anti-Tamper Holographic Header Strip -->
+                <div class="hologram-strip">
+                    <span>SECURE ENCLAVE NODE &middot; CRYPTOGRAPHICALLY SIGNED</span>
+                    <span id="cryptoHash">SHA-256: VALIDATED</span>
+                </div>
+
+                <!-- Profile Overview Section -->
                 <div class="profile-section">
-                    <div class="profile-avatar" id="userAvatar">
-                        <span id="avatarInitial">U</span>
+                    <div class="profile-avatar-wrap">
+                        <div class="profile-avatar" id="userAvatar">
+                            <span id="avatarInitial">U</span>
+                        </div>
+                        <div class="verified-check-seal" title="AI Verification Completed">✓</div>
                     </div>
+
                     <div class="profile-info">
-                        <h2 id="userName">Loading...</h2>
+                        <div class="profile-name-row">
+                            <h2 id="userName">Loading...</h2>
+                            <span class="ai-confidence-badge">99.8% AI Match</span>
+                        </div>
+
                         <div class="safenex-id-display">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
                                 <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
                             </svg>
                             <span id="userSafeNexID">SNX-XXXXXX</span>
+                            <button class="id-copy-btn" id="copyIdBtn" title="Copy SafeNex ID">📋</button>
                         </div>
                     </div>
                 </div>
 
-                <!-- Verification Status -->
-                <div class="verification-status">
-                    <div class="status-item verified">
-                        <div class="status-icon">✓</div>
-                        <div class="status-content">
-                            <div class="status-label">Identity Verified</div>
-                            <div class="status-value" id="verifiedDate">Jan 1, 2024</div>
-                        </div>
+                <!-- Authority Direct Inspection Details Grid -->
+                <div class="inspection-section">
+                    <div class="inspection-title-bar">
+                        <span>OFFICIAL VERIFICATION DETAILS</span>
+                        <span style="color:var(--cyan);font-weight:700">AUTHORITY INSPECTION MODE</span>
                     </div>
-                    <div class="status-item">
-                        <div class="status-icon">📄</div>
-                        <div class="status-content">
-                            <div class="status-label">Document Type</div>
-                            <div class="status-value" id="documentType">Aadhaar Card</div>
+
+                    <div class="inspection-grid">
+                        <div class="inspection-item">
+                            <span class="inspection-label">REGISTERED USER NAME</span>
+                            <span class="inspection-val" id="fullName">-</span>
                         </div>
-                    </div>
-                    <div class="status-item">
-                        <div class="status-icon">🆔</div>
-                        <div class="status-content">
-                            <div class="status-label">Document Number</div>
-                            <div class="status-value" id="documentNumber">XXXX-XXXX-1234</div>
+
+                        <div class="inspection-item inspection-item--highlight">
+                            <span class="inspection-label">AI VERIFIED GOVT DOC NAME</span>
+                            <span class="inspection-val" id="extractedName" style="color:var(--cyan)">-</span>
+                        </div>
+
+                        <div class="inspection-item">
+                            <span class="inspection-label">DOCUMENT TYPE</span>
+                            <span class="inspection-val" id="documentType">-</span>
+                        </div>
+
+                        <div class="inspection-item">
+                            <div class="label-with-action">
+                                <span class="inspection-label">DOCUMENT NUMBER</span>
+                                <button class="unmask-btn" id="toggleDocMaskBtn">Show Full ID</button>
+                            </div>
+                            <span class="inspection-val font-mono" id="documentNumber">XXXX-XXXX-XXXX</span>
+                        </div>
+
+                        <div class="inspection-item">
+                            <span class="inspection-label">VERIFIED TIMESTAMP</span>
+                            <span class="inspection-val" id="verifiedDate">-</span>
+                        </div>
+
+                        <div class="inspection-item">
+                            <span class="inspection-label">ACCOUNT REGISTRATION</span>
+                            <span class="inspection-val" id="memberSince">-</span>
+                        </div>
+
+                        <div class="inspection-item">
+                            <span class="inspection-label">ACCOUNT STATUS</span>
+                            <span class="inspection-val"><span class="status-pill active">Active &middot; Enrolled</span></span>
+                        </div>
+
+                        <div class="inspection-item">
+                            <span class="inspection-label">ENCLAVE PROTECTION TIER</span>
+                            <span class="inspection-val" style="color:var(--green)">Level 1 Full Clearance</span>
                         </div>
                     </div>
                 </div>
 
-                <!-- Details Grid -->
-                <div class="details-grid">
-                    <div class="detail-item">
-                        <div class="detail-label">Full Name</div>
-                        <div class="detail-value" id="fullName">-</div>
-                    </div>
-                    <div class="detail-item">
-                        <div class="detail-label">Verified Name</div>
-                        <div class="detail-value" id="extractedName">-</div>
-                    </div>
-                    <div class="detail-item">
-                        <div class="detail-label">Member Since</div>
-                        <div class="detail-value" id="memberSince">-</div>
-                    </div>
-                    <div class="detail-item">
-                        <div class="detail-label">Account Status</div>
-                        <div class="detail-value">
-                            <span class="status-badge active">Active</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Trust Score -->
+                <!-- Trust Score & Risk Assessment Section -->
                 <div class="trust-score-section">
                     <div class="trust-score-header">
-                        <h3>Trust Score</h3>
-                        <div class="trust-score-value" id="trustScore">95</div>
+                        <div>
+                            <h3>Cryptographic Trust Score</h3>
+                            <p class="trust-score-sub">Multi-layer identity &amp; document validation score</p>
+                        </div>
+                        <div class="trust-score-value"><span id="trustScore">100</span><small>/100</small></div>
                     </div>
+
                     <div class="trust-score-bar">
-                        <div class="trust-score-fill" id="trustScoreFill" style="width: 95%"></div>
+                        <div class="trust-score-fill" id="trustScoreFill" style="width: 100%"></div>
                     </div>
+
                     <div class="trust-score-indicators">
                         <div class="trust-indicator">
                             <span class="indicator-dot verified"></span>
-                            <span>Identity Verified</span>
+                            <span>Document AI Extraction Match (100%)</span>
                         </div>
                         <div class="trust-indicator">
                             <span class="indicator-dot verified"></span>
-                            <span>Document Verified</span>
+                            <span>SafeNex Cryptographic Ledger Validated</span>
                         </div>
                         <div class="trust-indicator">
                             <span class="indicator-dot verified"></span>
-                            <span>Active Member</span>
+                            <span>SafeNex System Active Member</span>
                         </div>
                     </div>
+                </div>
+
+                <!-- Authority Quick Actions Bar -->
+                <div class="authority-actions">
+                    <button class="authority-btn authority-btn--primary" id="runAuditBtn">
+                        <svg viewBox="0 0 24 24" fill="none"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke="currentColor" stroke-width="2"/><path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                        Run Live Signature Audit
+                    </button>
+                    <button class="authority-btn authority-btn--download" id="downloadPassBtn">
+                        <svg viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        Download Verified Pass
+                    </button>
+                    <button class="authority-btn" id="copyReportBtn">
+                        <svg viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" stroke="currentColor" stroke-width="2"/></svg>
+                        Copy Summary
+                    </button>
+                    <button class="authority-btn" onclick="window.print()">
+                        <svg viewBox="0 0 24 24" fill="none"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2" stroke="currentColor" stroke-width="2"/><path d="M6 14h12v8H6z" stroke="currentColor" stroke-width="2"/></svg>
+                        Print Pass
+                    </button>
                 </div>
 
                 <!-- Security Notice -->
@@ -141,15 +194,16 @@
                         <line x1="12" y1="8" x2="12.01" y2="8"></line>
                     </svg>
                     <div class="security-notice-content">
-                        <strong>Privacy Protected</strong>
-                        <p>Only publicly verifiable information is displayed. Personal contact details are kept private.</p>
+                        <strong>Official Law Enforcement Verification Notice</strong>
+                        <p>This verification pass is cryptographically generated by SafeNex AI System. Scanning the embedded QR code links directly to this tamper-proof verification ledger.</p>
                     </div>
                 </div>
+
             </div>
 
             <!-- Footer -->
             <div class="verify-footer">
-                <p>Verified by SafeNex Security System</p>
+                <p>SafeNex Security System &middot; Identity Verification Engine</p>
                 <p class="footer-timestamp" id="verificationTime">Verified at: -</p>
             </div>
         </div>

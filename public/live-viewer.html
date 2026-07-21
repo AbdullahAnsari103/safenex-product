@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+    <meta name="theme-color" content="#030712" />
+    <title>SafeNex — Live Location</title>
+    <meta name="description" content="Live location tracking shared via SafeNex." />
+    <!-- Open Graph / WhatsApp link preview meta tags -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="SafeNex — Live Location Alert" />
+    <meta property="og:description" content="Live location tracking active. Click to view real-time location on map." />
+    <meta property="og:image" content="https://safenex-ochre.vercel.app/logosaf.png" />
+    <!-- No index — this is a private emergency link -->
+    <meta name="robots" content="noindex, nofollow" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        /* ─── Reset & Base ─────────────────────────────────────────────── */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg:        #030712;
+            --glass:     rgba(15, 23, 42, 0.75);
+            --border:    rgba(255,255,255,0.07);
+            --border-hl: rgba(255,255,255,0.12);
+            --text:      #F8FAFC;
+            --muted:     #94A3B8;
+            --green:     #10B981;
+            --red:       #EF4444;
+            --radius:    20px;
+            --font:      'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        html, body {
+            height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--font);
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* ─── Full-screen map ──────────────────────────────────────────── */
+        #liveMap {
+            position: fixed;
+            inset: 0;
+            z-index: 1;
+            background: #020617;
+        }
+        .leaflet-tile { filter: brightness(0.65) contrast(1.15) saturate(0.75); }
+        .leaflet-container { background: #020617 !important; }
+
+        /* ─── Top Header ───────────────────────────────────────────────── */
+        #header {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 20px;
+            background: rgba(3, 7, 18, 0.7);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+        }
+
+        #header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        #logo-icon {
+            width: 36px; height: 36px;
+            background: linear-gradient(135deg, #1D4ED8, #0EA5E9);
+            border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            flex-shrink: 0;
+        }
+        #logo-icon svg { width: 20px; height: 20px; color: #fff; }
+
+        #header-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--text);
+            line-height: 1.2;
+        }
+        #header-subtitle {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        #live-badge {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 6px 14px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            border: 1px solid rgba(16,185,129,0.4);
+            background: rgba(16,185,129,0.12);
+            color: var(--green);
+            transition: all 0.5s;
+        }
+        #live-badge.ended {
+            border-color: rgba(255,255,255,0.1);
+            background: rgba(255,255,255,0.05);
+            color: var(--muted);
+        }
+        .live-dot {
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            background: var(--green);
+            animation: livePulse 1.5s ease-in-out infinite;
+        }
+        .live-dot.ended { background: var(--muted); animation: none; }
+        @keyframes livePulse {
+            0%,100% { opacity:1; box-shadow: 0 0 6px var(--green); }
+            50%      { opacity:0.5; box-shadow: 0 0 14px var(--green); }
+        }
+
+        /* ─── Bottom Info Panel ─────────────────────────────────────────── */
+        #info-panel {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            z-index: 100;
+            background: var(--glass);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border-top: 1px solid var(--border);
+            padding: 20px 20px 28px;
+            border-radius: var(--radius) var(--radius) 0 0;
+            box-shadow: 0 -10px 40px rgba(0,0,0,0.4);
+        }
+
+        #location-name {
+            font-size: 17px;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        #last-updated {
+            font-size: 13px;
+            color: var(--muted);
+            margin-bottom: 16px;
+        }
+
+        .info-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+        .info-stat {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 12px 10px;
+            text-align: center;
+        }
+        .info-stat__label {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-bottom: 6px;
+        }
+        .info-stat__value {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--text);
+        }
+        .info-stat__value.green { color: var(--green); }
+
+        /* ─── Animated pin ─────────────────────────────────────────────── */
+        .lv-pin {
+            width: 18px; height: 18px;
+            background: var(--green);
+            border: 3px solid #fff;
+            border-radius: 50%;
+            box-shadow: 0 0 0 0 rgba(16,185,129,0.5);
+            animation: pinPulse 2s ease-in-out infinite;
+        }
+        @keyframes pinPulse {
+            0%   { box-shadow: 0 0 0 0 rgba(16,185,129,0.7), 0 2px 6px rgba(0,0,0,0.5); }
+            70%  { box-shadow: 0 0 0 12px rgba(16,185,129,0), 0 2px 6px rgba(0,0,0,0.5); }
+            100% { box-shadow: 0 0 0 0 rgba(16,185,129,0), 0 2px 6px rgba(0,0,0,0.5); }
+        }
+
+        /* ─── Session Ended Overlay ─────────────────────────────────────── */
+        #ended-overlay {
+            position: fixed;
+            inset: 56px 0 0 0; /* below header */
+            z-index: 500;
+            background: rgba(3, 7, 18, 0.88);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            padding: 32px 24px;
+            text-align: center;
+        }
+        #ended-overlay.show { display: flex; }
+
+        .ended-icon {
+            width: 80px; height: 80px;
+            background: rgba(16,185,129,0.1);
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 36px;
+        }
+        .ended-title {
+            font-size: 22px; font-weight: 800; color: var(--text);
+        }
+        .ended-msg {
+            font-size: 15px; color: var(--muted); line-height: 1.6; max-width: 320px;
+        }
+        .ended-safenex {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #475569;
+            display: flex; align-items: center; gap: 6px;
+        }
+
+        /* ─── Error State ───────────────────────────────────────────────── */
+        #error-screen {
+            position: fixed;
+            inset: 0;
+            z-index: 600;
+            background: var(--bg);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            padding: 32px;
+            text-align: center;
+        }
+        #error-screen.show { display: flex; }
+        .error-icon { font-size: 60px; }
+        .error-title { font-size: 22px; font-weight: 700; color: var(--text); }
+        .error-msg { font-size: 15px; color: var(--muted); line-height: 1.6; max-width: 300px; }
+
+        /* ─── Loading spinner ───────────────────────────────────────────── */
+        #loading-screen {
+            position: fixed;
+            inset: 0; z-index: 700;
+            background: var(--bg);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+        }
+        .spinner {
+            width: 44px; height: 44px;
+            border: 3px solid rgba(255,255,255,0.08);
+            border-top-color: var(--green);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading-text { font-size: 15px; color: var(--muted); }
+
+        @media (max-width: 380px) {
+            #header-title { font-size: 14px; }
+            #header-subtitle { font-size: 11px; }
+            .info-stat__value { font-size: 14px; }
+        }
+
+        /* ─── Map Style Toggle ───────────────────────────────────────────── */
+        #map-toggle-btn {
+            position: fixed;
+            top: 72px;
+            right: 16px;
+            z-index: 200;
+            background: rgba(15,23,42,0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255,255,255,0.15);
+            color: #F8FAFC;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 7px 13px;
+            border-radius: 999px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: background 0.2s, transform 0.15s;
+            white-space: nowrap;
+        }
+        #map-toggle-btn:active { transform: scale(0.95); }
+        /* Light mode on page body — flip map text colour */
+        body.lv-light .leaflet-tile { filter: none; }
+    </style>
+</head>
+<body>
+
+    <!-- ── Loading ── -->
+    <div id="loading-screen">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+            <img src="/logosaf.png" alt="SafeNex Logo" style="width:32px;height:32px;object-fit:contain;" />
+            <span style="font-size:20px;font-weight:800;color:#F8FAFC;">SafeNex</span>
+        </div>
+        <div class="spinner"></div>
+        <span class="loading-text">Loading live location…</span>
+    </div>
+
+    <!-- ── Error ── -->
+    <div id="error-screen">
+        <div class="error-icon">🔗</div>
+        <div class="error-title" id="error-title">Link Not Found</div>
+        <div class="error-msg" id="error-msg">This tracking link is invalid or has expired.</div>
+    </div>
+
+    <!-- ── Header ── -->
+    <div id="header">
+        <div id="header-left">
+            <div id="logo-icon" style="background:transparent;">
+                <img src="/logosaf.png" alt="SafeNex" style="width:32px;height:32px;object-fit:contain;" />
+            </div>
+            <div>
+                <div id="header-title">Loading…</div>
+                <div id="header-subtitle">SafeNex Live Tracking</div>
+            </div>
+        </div>
+        <div id="live-badge">
+            <span class="live-dot" id="liveDot"></span>
+            <span id="liveBadgeText">LIVE</span>
+        </div>
+    </div>
+
+    <!-- ── Full-Screen Map ── -->
+    <div id="liveMap"></div>
+
+    <!-- ── Map Style Toggle Button ── -->
+    <button id="map-toggle-btn" aria-label="Toggle map style">🌙 Dark Mode</button>
+
+    <!-- ── Session Ended Overlay ── -->
+    <div id="ended-overlay">
+        <div class="ended-icon">✅</div>
+        <div class="ended-title">Session Ended</div>
+        <div class="ended-msg" id="ended-msg">This person has safely stopped sharing their location.</div>
+        <div class="ended-safenex">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke="currentColor" stroke-width="1.8"/>
+            </svg>
+            Powered by SafeNex
+        </div>
+    </div>
+
+    <!-- ── Bottom Info Panel ── -->
+    <div id="info-panel">
+        <div id="location-name">📍 Acquiring location…</div>
+        <div id="last-updated">Waiting for location data…</div>
+        <div class="info-stats">
+            <div class="info-stat">
+                <div class="info-stat__label">Duration</div>
+                <div class="info-stat__value" id="stat-duration">—</div>
+            </div>
+            <div class="info-stat">
+                <div class="info-stat__label">Pings</div>
+                <div class="info-stat__value green" id="stat-pings">—</div>
+            </div>
+            <div class="info-stat">
+                <div class="info-stat__label">Status</div>
+                <div class="info-stat__value green" id="stat-status">LIVE</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+    // ─── Init ───────────────────────────────────────────────────────────────────
+    const token = window.location.pathname.split('/live/')[1]?.split('?')[0];
+
+    let map         = null;
+    let userMarker  = null;
+    let pollTimer   = null;
+    let sessionEnded = false;
+    let lastPingAt  = null;
+    let startTime   = null;
+    let durationTimer = null;
+    let currentTileLayer = null;
+    let isDarkMode  = localStorage.getItem('lv_darkmode') === 'true';
+
+    // ─── Show error ──────────────────────────────────────────────────────────────
+    function showError(title, msg) {
+        document.getElementById('loading-screen').style.display = 'none';
+        const es = document.getElementById('error-screen');
+        es.classList.add('show');
+        document.getElementById('error-title').textContent   = title;
+        document.getElementById('error-msg').textContent     = msg;
+    }
+
+    // ─── Init Map ────────────────────────────────────────────────────────────────
+    function initMap(lat, lng) {
+        map = L.map('liveMap', {
+            zoomControl: false,
+            attributionControl: false,
+            dragging: true,
+            scrollWheelZoom: true,
+        }).setView([lat, lng], 15);
+
+        currentTileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap contributors',
+        }).addTo(map);
+
+        L.control.zoom({ position: 'bottomright' }).addTo(map);
+        updatePin(lat, lng);
+        reverseGeocode(lat, lng);
+    }
+
+    function pinHtml() {
+        return `<div class="lv-pin"></div>`;
+    }
+
+    function updatePin(lat, lng) {
+        const icon = L.divIcon({ className: '', html: pinHtml(), iconSize: [18, 18], iconAnchor: [9, 9] });
+        if (!userMarker) {
+            userMarker = L.marker([lat, lng], { icon }).addTo(map);
+        } else {
+            userMarker.setLatLng([lat, lng]);
+            map.panTo([lat, lng], { animate: true, duration: 0.8 });
+        }
+    }
+
+    // ─── Reverse Geocode ─────────────────────────────────────────────────────────
+    let geocodeTimer = null;
+    function reverseGeocode(lat, lng) {
+        clearTimeout(geocodeTimer);
+        geocodeTimer = setTimeout(async () => {
+            try {
+                const r = await fetch(
+                    `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
+                    { headers: { 'Accept-Language': 'en' } }
+                );
+                const d = await r.json();
+                const area = d?.address?.suburb || d?.address?.neighbourhood ||
+                             d?.address?.city_district || d?.address?.town ||
+                             d?.address?.city || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+                document.getElementById('location-name').textContent = '📍 ' + area;
+            } catch {}
+        }, 1500);
+    }
+
+    // ─── Duration Timer ──────────────────────────────────────────────────────────
+    function startDuration(start) {
+        const startMs = new Date(start).getTime();
+        function tick() {
+            const secs = Math.floor((Date.now() - startMs) / 1000);
+            const h = String(Math.floor(secs / 3600)).padStart(2, '0');
+            const m = String(Math.floor((secs % 3600) / 60)).padStart(2, '0');
+            const s = String(secs % 60).padStart(2, '0');
+            document.getElementById('stat-duration').textContent = `${h}:${m}:${s}`;
+        }
+        tick();
+        durationTimer = setInterval(tick, 1000);
+    }
+
+    // ─── "X seconds ago" ─────────────────────────────────────────────────────────
+    function timeAgo(iso) {
+        if (!iso) return 'Unknown';
+        const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+        if (secs < 5)  return 'Just now';
+        if (secs < 60) return `${secs} seconds ago`;
+        const m = Math.floor(secs / 60);
+        return m === 1 ? '1 minute ago' : `${m} minutes ago`;
+    }
+
+    // ─── Set session ended state ─────────────────────────────────────────────────
+    function setEnded(userName) {
+        sessionEnded = true;
+        clearInterval(pollTimer);
+        clearInterval(durationTimer);
+
+        const badge = document.getElementById('live-badge');
+        badge.classList.add('ended');
+        document.getElementById('liveDot').classList.add('ended');
+        document.getElementById('liveBadgeText').textContent = 'ENDED';
+
+        document.getElementById('stat-status').textContent = 'ENDED';
+        document.getElementById('stat-status').style.color = 'var(--muted)';
+
+        const overlay = document.getElementById('ended-overlay');
+        document.getElementById('ended-msg').textContent =
+            `${userName} has safely stopped sharing their location.`;
+        overlay.classList.add('show');
+
+        // Dim the map marker
+        if (userMarker) {
+            userMarker.setIcon(L.divIcon({
+                className: '',
+                html: `<div class="lv-pin" style="background:#64748B;animation:none;box-shadow:none;"></div>`,
+                iconSize: [18, 18],
+                iconAnchor: [9, 9]
+            }));
+        }
+    }
+
+    // ─── Poll for location ───────────────────────────────────────────────────────
+    async function poll() {
+        if (sessionEnded) return;
+        try {
+            const r = await fetch(`/api/tracking/live/${token}`);
+            const data = await r.json();
+
+            if (!r.ok || !data.success) {
+                if (r.status === 404) {
+                    showError('Link Not Found', 'This tracking link is invalid or has expired.');
+                }
+                return;
+            }
+
+            const d = data.data;
+
+            // First load
+            if (!map && d.lat && d.lng) {
+                document.getElementById('loading-screen').style.display = 'none';
+                document.getElementById('header-title').textContent = d.userName + "\'s Location";
+                initMap(d.lat, d.lng);
+                if (d.startTime && !startTime) {
+                    startTime = d.startTime;
+                    startDuration(startTime);
+                }
+            } else if (!map && !d.lat) {
+                // Active but no location yet
+                document.getElementById('loading-screen').style.display = 'none';
+                document.getElementById('header-title').textContent = d.userName + "\'s Location";
+                // Init map at a generic center, will update when we get coords
+                map = L.map('liveMap', { zoomControl: false, attributionControl: false })
+                        .setView([20, 78], 5);
+                currentTileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap contributors' }).addTo(map);
+                L.control.zoom({ position: 'bottomright' }).addTo(map);
+            }
+
+            // Update pin if we have coords
+            if (d.lat && d.lng) {
+                if (map && !userMarker) {
+                    map.setView([d.lat, d.lng], 15);
+                }
+                if (map) updatePin(d.lat, d.lng);
+                reverseGeocode(d.lat, d.lng);
+                lastPingAt = d.lastPingAt;
+            }
+
+            // Update stats
+            document.getElementById('stat-pings').textContent = d.pingCount || 0;
+            document.getElementById('last-updated').textContent =
+                d.lastPingAt ? `Last updated: ${timeAgo(d.lastPingAt)}` : 'Waiting for first ping…';
+
+            // Check if ended
+            if (!d.isActive) {
+                setEnded(d.userName || 'This person');
+            }
+
+        } catch (e) {
+            console.warn('[LiveViewer] Poll error:', e.message);
+        }
+    }
+
+    // ─── Boot ────────────────────────────────────────────────────────────────────
+    (async () => {
+        if (!token || token.length < 32) {
+            showError('Invalid Link', 'This tracking link appears to be malformed.');
+            return;
+        }
+
+        // Initial poll
+        await poll();
+
+        // Start polling every 5 seconds
+        pollTimer = setInterval(poll, 5000);
+
+        // Update "X sec ago" every second without re-polling
+        setInterval(() => {
+            if (lastPingAt && !sessionEnded) {
+                document.getElementById('last-updated').textContent =
+                    `Last updated: ${timeAgo(lastPingAt)}`;
+            }
+        }, 1000);
+
+        // Apply saved map style preference after map init (wait until map is ready)
+        const applyInitialTile = () => {
+            if (!map) { setTimeout(applyInitialTile, 500); return; }
+            if (isDarkMode) applyTile(true);
+            updateToggleBtn();
+        };
+        applyInitialTile();
+
+        // Wire toggle button
+        document.getElementById('map-toggle-btn').addEventListener('click', () => {
+            isDarkMode = !isDarkMode;
+            localStorage.setItem('lv_darkmode', isDarkMode);
+            applyTile(isDarkMode);
+            updateToggleBtn();
+        });
+    })();
+
+    // ─── Tile Switch Utils ────────────────────────────────────────────────────────
+    function applyTile(dark) {
+        if (!map) return;
+        if (currentTileLayer) map.removeLayer(currentTileLayer);
+        if (dark) {
+            document.body.classList.remove('lv-light');
+            currentTileLayer = L.tileLayer(
+                'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                { maxZoom: 19 }
+            ).addTo(map);
+        } else {
+            document.body.classList.add('lv-light');
+            currentTileLayer = L.tileLayer(
+                'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                { maxZoom: 19, attribution: '© OpenStreetMap contributors' }
+            ).addTo(map);
+        }
+    }
+
+    function updateToggleBtn() {
+        const btn = document.getElementById('map-toggle-btn');
+        if (!btn) return;
+        btn.textContent = isDarkMode ? '☀️ Light Mode' : '🌙 Dark Mode';
+    }
+    </script>
+</body>
+</html>

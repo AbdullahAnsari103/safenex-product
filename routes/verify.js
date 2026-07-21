@@ -45,12 +45,12 @@ function getActualProtocol(req) {
 }
 
 /**
- * Generate verification URL with proper host detection
+ * Generate verification URL for user ID QR Code.
+ * Encodes the devtunnel host URL so external mobile QR scanners open the live verification link directly.
  */
 function generateVerificationURL(req, safeNexID) {
-    const protocol = getActualProtocol(req);
-    const host = getActualHost(req);
-    return `${protocol}://${host}/verify-user.html?id=${safeNexID}`;
+    const baseUrl = (process.env.PUBLIC_URL || process.env.DEV_TUNNEL_URL || process.env.BASE_URL || 'https://safenex-ochre.vercel.app').replace(/\/+$/, '');
+    return `${baseUrl}/verify-user.html?id=${safeNexID}`;
 }
 
 // POST /api/verify/document

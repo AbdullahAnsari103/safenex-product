@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SafeNex Admin Dashboard</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="admin.css">
 </head>
 <body>
@@ -77,6 +78,11 @@
                     <a href="#" class="nav-item" data-section="activity">
                         <span class="nav-icon">📝</span>
                         <span class="nav-text">Activity Log</span>
+                    </a>
+                    <a href="#" class="nav-item" data-section="live-tracking">
+                        <span class="nav-icon">📍</span>
+                        <span class="nav-text">Live Tracking</span>
+                        <span class="nav-badge badge-success" id="liveTrackingBadge">0</span>
                     </a>
                 </nav>
             </aside>
@@ -381,6 +387,72 @@
                         <div class="loading">Loading activity...</div>
                     </div>
                 </section>
+
+                <!-- Live Tracking Section -->
+                <section id="live-tracking-section" class="content-section">
+                    <div class="section-header lt-section-header">
+                        <div>
+                            <h2>📍 Live Tracking Command Center</h2>
+                            <p class="lt-subtitle">Real-time voluntary user location monitoring</p>
+                        </div>
+                        <div class="lt-header-stats">
+                            <div class="lt-live-pill">
+                                <span class="lt-live-dot"></span>
+                                <span id="ltLiveCount">0</span> Users Live
+                            </div>
+                            <div class="lt-danger-pill" id="ltDangerPill" style="display:none">
+                                ⚠️ <span id="ltDangerCount">0</span> In Danger
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="lt-layout">
+                        <!-- Map Panel -->
+                        <div class="lt-map-panel">
+                            <div class="lt-map-controls">
+                                <button class="lt-ctrl-btn" onclick="ltFitAll()" title="Fit all users">⊕ Fit All</button>
+                                <button class="lt-ctrl-btn" id="ltToggleTrails" onclick="ltToggleTrails()" title="Toggle trails">〰 Trails</button>
+                                <button class="lt-ctrl-btn" id="ltToggleZones" onclick="ltToggleZoneOverlays()" title="Toggle danger zones">⚠ Zones</button>
+                                <button class="lt-ctrl-btn" id="ltMapStyleBtn" onclick="ltToggleMapStyle()" title="Toggle map style">🌙 Dark</button>
+                            </div>
+                            <div id="ltMap"></div>
+                            <div class="lt-map-empty" id="ltMapEmpty">
+                                <div class="lt-map-empty-icon">📍</div>
+                                <div>No users are currently sharing their location.</div>
+                                <p>Users will appear here when they enable Track Me.</p>
+                            </div>
+                        </div>
+
+                        <!-- User List Panel -->
+                        <div class="lt-list-panel">
+                            <!-- Search + Filter -->
+                            <div class="lt-list-search">
+                                <input type="text" id="ltSearch" placeholder="Search user…" class="search-input" oninput="ltFilterUsers()" />
+                                <select id="ltZoneFilter" class="filter-select" onchange="ltFilterUsers()">
+                                    <option value="">All Zones</option>
+                                    <option value="danger">⚠️ In Danger</option>
+                                    <option value="safe">✅ Safe</option>
+                                </select>
+                            </div>
+
+                            <!-- Tabs -->
+                            <div class="lt-tabs">
+                                <button class="lt-tab active" data-tab="all" onclick="ltSetTab(this,'all')">All</button>
+                                <button class="lt-tab" data-tab="danger" onclick="ltSetTab(this,'danger')">In Danger</button>
+                                <button class="lt-tab" data-tab="stationary" onclick="ltSetTab(this,'stationary')">Stationary</button>
+                            </div>
+
+                            <!-- User list -->
+                            <div class="lt-user-list" id="ltUserList">
+                                <div class="lt-empty-state" id="ltListEmpty">
+                                    <div style="font-size:32px">📍</div>
+                                    <p>No active users.</p>
+                                    <p style="font-size:12px;opacity:0.6">Users will appear here when they turn on Track Me.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
             </main>
         </div>
     </div>
@@ -501,6 +573,25 @@
         </div>
     </div>
 
+    <!-- Danger Zone Alert Toasts -->
+    <div id="ltToastContainer" class="lt-toast-container"></div>
+
+    <!-- Track History Modal -->
+    <div class="modal" id="ltHistoryModal" style="display:none;">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <h2>📍 Track History</h2>
+                <button class="close-btn" onclick="document.getElementById('ltHistoryModal').style.display='none'">×</button>
+            </div>
+            <div class="modal-body">
+                <div id="ltHistoryMapWrap" style="height:320px;border-radius:10px;overflow:hidden;"></div>
+                <div id="ltHistoryStats" style="margin-top:12px;font-size:13px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
     <script src="admin.js"></script>
 </body>
 </html>

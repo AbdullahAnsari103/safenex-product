@@ -193,6 +193,63 @@ async function initDB() {
     )
   `);
 
+    // Track Me sessions table
+    await client.execute(`
+    CREATE TABLE IF NOT EXISTS trackme_sessions (
+      id                    TEXT PRIMARY KEY,
+      user_id               TEXT NOT NULL,
+      user_name             TEXT,
+      safenex_id            TEXT,
+      start_time            TEXT NOT NULL,
+      end_time              TEXT,
+      last_lat              REAL,
+      last_lng              REAL,
+      last_ping_at          TEXT,
+      ping_count            INTEGER DEFAULT 0,
+      ended_normally        INTEGER DEFAULT 1,
+      coordinates           TEXT DEFAULT '[]',
+      tracking_status       TEXT NOT NULL DEFAULT 'INACTIVE',
+      reconnect_token       TEXT,
+      device_id             TEXT,
+      tracking_token        TEXT,
+      tracking_link_active  INTEGER DEFAULT 0,
+      link_generated_at     TEXT,
+      link_expired_at       TEXT,
+      created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+    // Idempotent migrations — add new columns to existing tables safely
+    const tmMigrations = [
+        `ALTER TABLE trackme_sessions ADD COLUMN tracking_status TEXT NOT NULL DEFAULT 'INACTIVE'`,
+        `ALTER TABLE trackme_sessions ADD COLUMN reconnect_token TEXT`,
+        `ALTER TABLE trackme_sessions ADD COLUMN device_id TEXT`,
+        `ALTER TABLE trackme_sessions ADD COLUMN tracking_token TEXT`,
+        `ALTER TABLE trackme_sessions ADD COLUMN tracking_link_active INTEGER DEFAULT 0`,
+        `ALTER TABLE trackme_sessions ADD COLUMN link_generated_at TEXT`,
+        `ALTER TABLE trackme_sessions ADD COLUMN link_expired_at TEXT`,
+    ];
+    for (const sql of tmMigrations) {
+        try { await client.execute(sql); } catch(e) { /* column already exists — safe to ignore */ }
+    }
+
+    // Track Me pings table
+    await client.execute(`
+    CREATE TABLE IF NOT EXISTS trackme_pings (
+      id          TEXT PRIMARY KEY,
+      session_id  TEXT NOT NULL,
+      user_id     TEXT NOT NULL,
+      lat         REAL NOT NULL,
+      lng         REAL NOT NULL,
+      speed       REAL,
+      timestamp   TEXT NOT NULL,
+      in_danger   INTEGER DEFAULT 0,
+      zone_id     TEXT,
+      FOREIGN KEY (session_id) REFERENCES trackme_sessions(id) ON DELETE CASCADE
+    )
+  `);
+
     console.log('✅ Turso DB connected and schema ready.');
 }
 
@@ -2148,3 +2205,359 @@ async function updateLastActive(userId) {
 }
 
 module.exports.updateLastActive = updateLastActive;
+
+// ─── Track Me Functions ───────────────────────────────────────────────────────
+
+/** Start a new Track Me session for a user (auto-closes any existing active session first) */
+async function startTrackMeSession(userId, userName, safeNexId, deviceId) {
+    // ── Dedup guard: close any still-open session for this user ──────────────
+    // Mark old open sessions INACTIVE so they don't appear in the admin list.
+    await client.execute({
+        sql: `UPDATE trackme_sessions
+              SET end_time = ?, ended_normally = 0, tracking_status = 'INACTIVE'
+              WHERE user_id = ? AND tracking_status = 'ACTIVE'`,
+        args: [new Date().toISOString(), userId],
+    });
+
+    const id = uuidv4();
+    const reconnectToken = uuidv4(); // unique token for resuming session
+    const startTime = new Date().toISOString();
+
+    await client.execute({
+        sql: `INSERT INTO trackme_sessions
+              (id, user_id, user_name, safenex_id, start_time, coordinates,
+               tracking_status, reconnect_token, device_id, created_at)
+              VALUES (?, ?, ?, ?, ?, '[]', 'ACTIVE', ?, ?, ?)`,
+        args: [id, userId, userName || null, safeNexId || null, startTime,
+               reconnectToken, deviceId || null, startTime],
+    });
+
+    return { sessionId: id, startTime, reconnectToken };
+}
+
+module.exports.startTrackMeSession = startTrackMeSession;
+
+/** Update a Track Me session with new location ping */
+async function updateTrackMeSession(sessionId, userId, lat, lng, speed, inDanger, zoneId) {
+    const pingId = uuidv4();
+    const timestamp = new Date().toISOString();
+
+    // Insert ping record
+    await client.execute({
+        sql: `INSERT INTO trackme_pings (id, session_id, user_id, lat, lng, speed, timestamp, in_danger, zone_id)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [pingId, sessionId, userId, lat, lng, speed || null, timestamp, inDanger ? 1 : 0, zoneId || null],
+    });
+
+    // Get existing coordinates
+    const sessionRes = await client.execute({
+        sql: 'SELECT coordinates, ping_count FROM trackme_sessions WHERE id = ?',
+        args: [sessionId],
+    });
+
+    if (sessionRes.rows.length === 0) return null;
+
+    let coords = [];
+    try {
+        coords = JSON.parse(sessionRes.rows[0].coordinates || '[]');
+    } catch (e) { coords = []; }
+
+    // Append new coordinate (keep last 500 points max)
+    coords.push({ lat, lng, ts: timestamp, speed: speed || 0, inDanger: !!inDanger });
+    if (coords.length > 500) coords = coords.slice(-500);
+
+    // Update session
+    await client.execute({
+        sql: `UPDATE trackme_sessions SET
+              last_lat = ?, last_lng = ?, last_ping_at = ?,
+              ping_count = ping_count + 1, coordinates = ?
+              WHERE id = ?`,
+        args: [lat, lng, timestamp, JSON.stringify(coords), sessionId],
+    });
+
+    return { pingId, timestamp, pingCount: (sessionRes.rows[0].ping_count || 0) + 1 };
+}
+
+module.exports.updateTrackMeSession = updateTrackMeSession;
+
+/** Get a single Track Me session by ID */
+async function getTrackMeSession(sessionId) {
+    const res = await client.execute({
+        sql: 'SELECT * FROM trackme_sessions WHERE id = ?',
+        args: [sessionId],
+    });
+    
+    if (res.rows.length === 0) {
+        return null;
+    }
+    
+    const row = res.rows[0];
+    return {
+        id: row.id,
+        userId: row.user_id,
+        userName: row.user_name,
+        safeNexId: row.safenex_id,
+        startTime: row.start_time,
+        endTime: row.end_time,
+        lastLat: row.last_lat,
+        lastLng: row.last_lng,
+        lastPingAt: row.last_ping_at,
+        pingCount: row.ping_count,
+        coordinates: row.coordinates ? JSON.parse(row.coordinates) : [],
+        endedNormally: row.ended_normally,
+        trackingStatus: row.tracking_status,
+        reconnectToken: row.reconnect_token,
+        deviceId: row.device_id,
+        inDanger: row.in_danger,
+        dangerZoneId: row.danger_zone_id,
+    };
+}
+
+module.exports.getTrackMeSession = getTrackMeSession;
+
+/** End a Track Me session — the ONLY way to mark a session INACTIVE */
+async function endTrackMeSession(sessionId, endedNormally = true) {
+    const endTime = new Date().toISOString();
+
+    await client.execute({
+        sql: `UPDATE trackme_sessions
+              SET end_time = ?, ended_normally = ?, tracking_status = 'INACTIVE'
+              WHERE id = ?`,
+        args: [endTime, endedNormally ? 1 : 0, sessionId],
+    });
+
+    return { endTime };
+}
+
+module.exports.endTrackMeSession = endTrackMeSession;
+
+/**
+ * Get the currently ACTIVE session for a specific user.
+ * Called by the client on every page load to check if tracking should be resumed.
+ * Returns null if no active session exists.
+ */
+async function getActiveSessionForUser(userId) {
+    const res = await client.execute({
+        sql: `SELECT id, start_time, last_lat, last_lng, last_ping_at, ping_count,
+                     reconnect_token, tracking_status
+              FROM trackme_sessions
+              WHERE user_id = ? AND tracking_status = 'ACTIVE'
+              ORDER BY start_time DESC
+              LIMIT 1`,
+        args: [userId],
+    });
+
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+        sessionId: row.id,
+        startTime: row.start_time,
+        lastLat: row.last_lat,
+        lastLng: row.last_lng,
+        lastPingAt: row.last_ping_at,
+        pingCount: row.ping_count || 0,
+        reconnectToken: row.reconnect_token,
+        trackingStatus: row.tracking_status,
+    };
+}
+
+module.exports.getActiveSessionForUser = getActiveSessionForUser;
+
+/** Get all currently ACTIVE Track Me sessions, one per unique user (latest session wins) */
+async function getActiveTrackMeSessions() {
+    // Filter by tracking_status = 'ACTIVE' (server-authoritative field).
+    // Guarantees exactly one row per unique tracked user via the correlated subquery.
+    const res = await client.execute(`
+        SELECT ts.*, u.name as u_name, u.safenex_id as u_snx_id
+        FROM trackme_sessions ts
+        LEFT JOIN users u ON ts.user_id = u.id
+        WHERE ts.tracking_status = 'ACTIVE'
+          AND ts.start_time = (
+              SELECT MAX(start_time)
+              FROM trackme_sessions t2
+              WHERE t2.user_id = ts.user_id
+                AND t2.tracking_status = 'ACTIVE'
+          )
+        ORDER BY ts.start_time DESC
+    `);
+
+    return res.rows.map(row => ({
+        sessionId: row.id,
+        userId: row.user_id,
+        userName: row.user_name || row.u_name || 'Unknown',
+        safeNexId: row.safenex_id || row.u_snx_id || null,
+        startTime: row.start_time,
+        lastLat: row.last_lat,
+        lastLng: row.last_lng,
+        lastPingAt: row.last_ping_at,
+        pingCount: row.ping_count || 0,
+        trackingStatus: row.tracking_status || 'ACTIVE',
+        coordinates: (() => { try { return JSON.parse(row.coordinates || '[]'); } catch(e){ return []; } })(),
+    }));
+}
+
+module.exports.getActiveTrackMeSessions = getActiveTrackMeSessions;
+
+/** Get Track Me session history for a user */
+async function getTrackMeSessionHistory(userId, limit = 20) {
+    const res = await client.execute({
+        sql: `SELECT * FROM trackme_sessions WHERE user_id = ?
+              ORDER BY created_at DESC LIMIT ?`,
+        args: [userId, limit],
+    });
+
+    return res.rows.map(row => ({
+        sessionId: row.id,
+        startTime: row.start_time,
+        endTime: row.end_time,
+        lastLat: row.last_lat,
+        lastLng: row.last_lng,
+        pingCount: row.ping_count || 0,
+        endedNormally: row.ended_normally === 1,
+        coordinates: (() => { try { return JSON.parse(row.coordinates || '[]'); } catch(e){ return []; } })(),
+        createdAt: row.created_at,
+    }));
+}
+
+module.exports.getTrackMeSessionHistory = getTrackMeSessionHistory;
+
+// ─── Share Link helpers ───────────────────────────────────────────────────────
+
+/**
+ * Generate a cryptographically random 32-byte hex token, attach it to the
+ * user's active session and mark the link as active.
+ * Returns { token, sessionId } or null if no active session exists.
+ */
+async function generateShareLink(userId) {
+    const crypto = require('crypto');
+
+    // Find latest ACTIVE session for user
+    const sessionRes = await client.execute({
+        sql: `SELECT id FROM trackme_sessions
+              WHERE user_id = ? AND tracking_status = 'ACTIVE'
+              ORDER BY start_time DESC LIMIT 1`,
+        args: [userId],
+    });
+    if (sessionRes.rows.length === 0) return null;
+
+    const sessionId = sessionRes.rows[0].id;
+
+    // Generate unique token (retry on the extremely unlikely collision)
+    let token;
+    for (let attempt = 0; attempt < 5; attempt++) {
+        const candidate = crypto.randomBytes(32).toString('hex'); // 64-char hex
+        const clash = await client.execute({
+            sql: `SELECT id FROM trackme_sessions WHERE tracking_token = ? LIMIT 1`,
+            args: [candidate],
+        });
+        if (clash.rows.length === 0) { token = candidate; break; }
+    }
+    if (!token) throw new Error('Failed to generate unique tracking token');
+
+    const now = new Date().toISOString();
+    await client.execute({
+        sql: `UPDATE trackme_sessions
+              SET tracking_token = ?, tracking_link_active = 1, link_generated_at = ?, link_expired_at = NULL
+              WHERE id = ?`,
+        args: [token, now, sessionId],
+    });
+
+    return { token, sessionId };
+}
+
+module.exports.generateShareLink = generateShareLink;
+
+/**
+ * Expire the share link for the user's session.
+ * Sets tracking_link_active = 0 and records expiry timestamp.
+ */
+async function expireShareLink(userId) {
+    const now = new Date().toISOString();
+    await client.execute({
+        sql: `UPDATE trackme_sessions
+              SET tracking_link_active = 0, link_expired_at = ?
+              WHERE user_id = ? AND tracking_status = 'ACTIVE'`,
+        args: [now, userId],
+    });
+}
+
+module.exports.expireShareLink = expireShareLink;
+
+/**
+ * Public lookup by tracking token — used by the live viewer page.
+ * No authentication required.
+ * Returns null if token not found.
+ */
+async function getSessionByToken(token) {
+    const res = await client.execute({
+        sql: `SELECT ts.id, ts.user_id, ts.user_name, ts.safenex_id,
+                     ts.last_lat, ts.last_lng, ts.last_ping_at, ts.ping_count,
+                     ts.start_time, ts.end_time, ts.tracking_status,
+                     ts.tracking_link_active, ts.link_generated_at, ts.link_expired_at
+              FROM trackme_sessions ts
+              WHERE ts.tracking_token = ?
+              LIMIT 1`,
+        args: [token],
+    });
+    if (res.rows.length === 0) return null;
+
+    const row = res.rows[0];
+    return {
+        sessionId:          row.id,
+        userId:             row.user_id,
+        userName:           row.user_name || 'SafeNex User',
+        safeNexId:          row.safenex_id || null,
+        lastLat:            row.last_lat,
+        lastLng:            row.last_lng,
+        lastPingAt:         row.last_ping_at,
+        pingCount:          row.ping_count || 0,
+        startTime:          row.start_time,
+        endTime:            row.end_time,
+        trackingStatus:     row.tracking_status,
+        isActive:           row.tracking_link_active === 1,
+        linkGeneratedAt:    row.link_generated_at,
+        linkExpiredAt:      row.link_expired_at,
+    };
+}
+
+module.exports.getSessionByToken = getSessionByToken;
+
+/**
+ * Get the active share link token for a specific user.
+ * Used by GET /api/trackme/session-link to restore the link on page reload.
+ */
+async function getSessionByTokenForUser(userId) {
+    const res = await client.execute({
+        sql: `SELECT tracking_token, tracking_link_active
+              FROM trackme_sessions
+              WHERE user_id = ? AND tracking_status = 'ACTIVE'
+              ORDER BY start_time DESC LIMIT 1`,
+        args: [userId],
+    });
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+        token: row.tracking_token,
+        isLinkActive: row.tracking_link_active === 1,
+    };
+}
+
+module.exports.getSessionByTokenForUser = getSessionByTokenForUser;
+
+/**
+ * Auto-expire any share links that have been active for more than 24 hours.
+ * Called periodically from server.js as a safety net.
+ */
+async function expireStaleShareLinks() {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    await client.execute({
+        sql: `UPDATE trackme_sessions
+              SET tracking_link_active = 0, link_expired_at = ?
+              WHERE tracking_link_active = 1
+                AND link_generated_at < ?`,
+        args: [new Date().toISOString(), cutoff],
+    });
+}
+
+module.exports.expireStaleShareLinks = expireStaleShareLinks;
+

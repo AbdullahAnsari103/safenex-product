@@ -15,6 +15,12 @@ const errorHandler = (err, req, res, next) => {
         message = Object.values(err.errors).map((e) => e.message).join(', ');
     }
 
+    // Multer file size error
+    if (err.code === 'LIMIT_FILE_SIZE') {
+        statusCode = 400;
+        message = 'File size is too large. Maximum allowed size is 10MB.';
+    }
+
     // JWT errors
     if (err.name === 'JsonWebTokenError') {
         statusCode = 401;
