@@ -54,7 +54,7 @@ async function regenerateQRCodes() {
         }
 
         // Get base URL from environment or use default vercel URL
-        const baseURL = process.env.PUBLIC_URL || process.env.DEV_TUNNEL_URL || process.env.BASE_URL || 'https://safenex-ochre.vercel.app';
+        const baseURL = process.env.PUBLIC_URL || process.env.DEV_TUNNEL_URL || process.env.BASE_URL || 'https://safenex-amd.onrender.com';
         console.log(`🌐 Using base URL: ${baseURL}\n`);
 
         let updated = 0;

@@ -453,7 +453,7 @@ function downloadVerifiedPass() {
 
         ctx.fillStyle = '#94A3B8';
         ctx.font = '11px sans-serif';
-        ctx.fillText('safenex-ochre.vercel.app', 1205, 642);
+        ctx.fillText('safenex-amd.onrender.com', 1205, 642);
 
         ctx.textAlign = 'left';
 
