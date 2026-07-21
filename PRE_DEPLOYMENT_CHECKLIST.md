@@ -47,13 +47,13 @@
 
 **Current .env contains real secrets:**
 ```
-JWT_SECRET=safenex_dev_secret_change_me  ⚠️ Weak secret
-GEMINI_API_KEY=AIzaSyB_q613NLA66hmrjYDEdv6yZV1lrWmqdEY  🔴 EXPOSED
-GEMINI_API_KEY_SAFETRACE=AIzaSyCexJHb5HfQP_U7TphNSTqB0dQhzTpCmWM  🔴 EXPOSED
-TURSO_AUTH_TOKEN=eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9...  🔴 EXPOSED
-OPENROUTE_API_KEY=eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImY2ODMzMTRhYjJjMzQyNjI4YmYxY2JhNTgyMGM5OTY1IiwiaCI6Im11cm11cjY0In0=  🔴 EXPOSED
-ADMIN_EMAIL=abdullahansari01618@gmail.com  🔴 EXPOSED
-ADMIN_PASSWORD=9920867077@Adil  🔴 EXPOSED
+JWT_SECRET=your_jwt_secret_here  ⚠️ Change in production
+GEMINI_API_KEY=your_gemini_key_here
+GEMINI_API_KEY_SAFETRACE=your_safetrace_key_here
+TURSO_AUTH_TOKEN=your_turso_token_here
+OPENROUTE_API_KEY=your_openroute_key_here
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=your_admin_password_here
 ```
 
 **ACTION REQUIRED:**

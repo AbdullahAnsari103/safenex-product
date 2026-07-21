@@ -4,8 +4,8 @@
 
 **CRITICAL:** The following API keys were accidentally exposed in the git history and have been removed:
 
-1. **Gemini API Key (Primary)**: `AIzaSyALw3B3da0XixSNoNTg6oGpKt47acjNoE0`
-2. **Gemini API Key (SafeTrace)**: `AIzaSyBSS5joKEqx1xS7APTAIhMC91hXibxhR1w`
+1. **Gemini API Key (Primary)**: `[REDACTED_API_KEY]`
+2. **Gemini API Key (SafeTrace)**: `[REDACTED_API_KEY]`
 
 ## ⚡ IMMEDIATE ACTIONS REQUIRED
 

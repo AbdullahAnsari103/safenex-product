@@ -144,5 +144,10 @@ vite.config.ts.timestamp-*
 # SafeNex specific
 uploads/
 qrcodes/
+VERCEL_ENV_VARIABLES.txt
+.gemini/
+scratch/
+*.db
+*.sqlite
 .DS_Store
 Thumbs.db
