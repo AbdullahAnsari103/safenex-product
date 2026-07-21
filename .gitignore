@@ -151,3 +151,9 @@ scratch/
 *.sqlite
 .DS_Store
 Thumbs.db
+
+# Mobile / Capacitor (Local build only)
+android/
+ios/
+capacitor.config.json
+capacitor.config.ts

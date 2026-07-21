@@ -1,0 +1,17 @@
+{
+  "short_name": "SafeNex",
+  "name": "SafeNex — Real-Time Safety & Live Location Platform",
+  "icons": [
+    {
+      "src": "/logosaf.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/landing.html",
+  "background_color": "#030712",
+  "theme_color": "#030712",
+  "display": "standalone",
+  "orientation": "portrait"
+}
