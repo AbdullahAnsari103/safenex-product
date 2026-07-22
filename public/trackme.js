@@ -326,18 +326,16 @@ async function startTracking() {
             if (waBtn && waUrls && waUrls.length > 0) {
                 waBtn.hidden = false;
                 waBtn.onclick = () => {
-                    window.open(waUrls[0], '_blank');
+                    openWhatsAppLink(waUrls[0]);
                 };
             }
 
-            // Automatically open WhatsApp tab if shareWithContacts is ON
+            // Automatically open WhatsApp on mobile or desktop if shareWithContacts is ON
             if (shareWithContacts && waUrls && waUrls.length > 0) {
-                const win = window.open(waUrls[0], '_blank');
-                if (!win) {
-                    showToast('📱 Tap "Share via WhatsApp" button below to send location link to trusted contacts.', 'info');
-                } else {
-                    showToast('📲 Opening WhatsApp with your live tracking link...', 'success');
-                }
+                showToast('📲 Launching WhatsApp with your live tracking link...', 'success');
+                setTimeout(() => {
+                    openWhatsAppLink(waUrls[0]);
+                }, 300);
             } else if (!shareWithContacts) {
                 const bannerText = document.getElementById('tmShareBannerText');
                 if (bannerText) bannerText.textContent = 'Tracking link active. Contacts will not be notified automatically.';
@@ -553,6 +551,21 @@ function initEventListeners() {
     document.getElementById('shareContactsToggle')?.addEventListener('change', (e) => {
         updateContactsToggleHint(e.target.checked);
     });
+}
+
+// ─── WhatsApp Mobile & Desktop Launcher ──────────────────────────────────────
+function openWhatsAppLink(url) {
+    if (!url) return;
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    if (isMobile) {
+        // Direct navigation on mobile launches native WhatsApp application
+        window.location.href = url;
+    } else {
+        const win = window.open(url, '_blank');
+        if (!win) {
+            window.location.href = url;
+        }
+    }
 }
 
 // ─── Update contacts hint text ────────────────────────────────────────────────
