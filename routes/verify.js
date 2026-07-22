@@ -49,7 +49,7 @@ function getActualProtocol(req) {
  * Encodes the devtunnel host URL so external mobile QR scanners open the live verification link directly.
  */
 function generateVerificationURL(req, safeNexID) {
-    const baseUrl = (process.env.PUBLIC_URL || process.env.DEV_TUNNEL_URL || process.env.BASE_URL || 'https://safenex-amd.onrender.com').replace(/\/+$/, '');
+    const baseUrl = (process.env.PUBLIC_URL || process.env.DEV_TUNNEL_URL || process.env.BASE_URL || 'https://safenex-six.vercel.app').replace(/\/+$/, '');
     return `${baseUrl}/verify-user.html?id=${safeNexID}`;
 }
 

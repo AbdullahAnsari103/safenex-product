@@ -289,7 +289,7 @@ router.post('/generate-link', async (req, res, next) => {
         const user = req.user;
 
         // Base URL for shareable live tracking link — defaults to production vercel URL
-        const rawBaseUrl = process.env.PUBLIC_URL || process.env.DEV_TUNNEL_URL || process.env.BASE_URL || 'https://safenex-amd.onrender.com';
+        const rawBaseUrl = process.env.PUBLIC_URL || process.env.DEV_TUNNEL_URL || process.env.BASE_URL || 'https://safenex-six.vercel.app';
         const baseUrl = rawBaseUrl.replace(/\/+$/, '');
 
         // Generate & persist token in DB
@@ -395,7 +395,7 @@ router.post('/expire-link', async (req, res, next) => {
  */
 router.get('/session-link', async (req, res, next) => {
     try {
-        const rawBaseUrl = process.env.PUBLIC_URL || process.env.DEV_TUNNEL_URL || process.env.BASE_URL || 'https://safenex-amd.onrender.com';
+        const rawBaseUrl = process.env.PUBLIC_URL || process.env.DEV_TUNNEL_URL || process.env.BASE_URL || 'https://safenex-six.vercel.app';
         const baseUrl = rawBaseUrl.replace(/\/+$/, '');
         const session = await store.getActiveSessionForUser(req.user._id);
         if (!session) {
