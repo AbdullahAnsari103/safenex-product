@@ -633,17 +633,21 @@ html, body {
 
 /* ─── Toast ─────────────────────────────────────────────────────────────────── */
 .tm-toast {
-    position: fixed; bottom: 40px; left: 50%;
+    position: fixed; bottom: 24px; left: 50%;
     transform: translateX(-50%) translateY(20px);
-    background: rgba(15, 23, 42, 0.85);
-    backdrop-filter: blur(12px);
+    background: rgba(15, 23, 42, 0.95);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
     border: 1px solid var(--border-hl);
     border-radius: 14px;
-    padding: 14px 24px;
-    font-size: 14px; font-weight: 500; color: var(--text);
+    padding: 12px 20px;
+    font-size: 13.5px; font-weight: 500; color: var(--text);
     opacity: 0; pointer-events: none;
     transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-    z-index: 600; white-space: nowrap;
+    z-index: 600;
+    max-width: 90vw;
+    text-align: center;
+    word-break: break-word;
     box-shadow: 0 10px 30px rgba(0,0,0,0.5);
 }
 .tm-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }

@@ -557,13 +557,26 @@ function initEventListeners() {
 function openWhatsAppLink(url) {
     if (!url) return;
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    if (isMobile) {
-        // Direct navigation on mobile launches native WhatsApp application
-        window.location.href = url;
+    const isCapacitor = !!window.Capacitor;
+
+    // Ensure wa.me format for mobile deep linking
+    let targetUrl = url;
+    if (targetUrl.includes('api.whatsapp.com/send')) {
+        targetUrl = targetUrl.replace('https://api.whatsapp.com/send?phone=', 'https://wa.me/')
+                             .replace('https://api.whatsapp.com/send', 'https://wa.me/')
+                             .replace('&text=', '?text=');
+    }
+
+    if (isMobile || isCapacitor) {
+        try {
+            window.location.href = targetUrl;
+        } catch (_) {
+            window.open(targetUrl, '_system');
+        }
     } else {
-        const win = window.open(url, '_blank');
+        const win = window.open(targetUrl, '_blank');
         if (!win) {
-            window.location.href = url;
+            window.location.href = targetUrl;
         }
     }
 }

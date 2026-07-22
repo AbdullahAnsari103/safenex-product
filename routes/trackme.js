@@ -322,10 +322,10 @@ router.post('/generate-link', async (req, res, next) => {
         // Build WhatsApp URLs: targeted contacts or universal share URL
         let waUrls = [];
         if (contacts.length > 0) {
-            waUrls = contacts.map(phone => `https://api.whatsapp.com/send?phone=${phone}&text=${startMsg}`);
+            waUrls = contacts.map(phone => `https://wa.me/${phone}?text=${startMsg}`);
         } else {
             // Fallback universal WhatsApp share link if no contacts pre-configured
-            waUrls = [`https://api.whatsapp.com/send?text=${startMsg}`];
+            waUrls = [`https://wa.me/?text=${startMsg}`];
         }
 
         res.json({
