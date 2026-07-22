@@ -242,22 +242,39 @@ async function startTracking() {
     // ── Step 2: Show loading indicator while GPS permission is requested
     setTrackingUI('loading');
 
-    let initialPosition;
+    let initialPosition = null;
     try {
+        // Stage 1: Attempt high-accuracy GPS (7s timeout)
         initialPosition = await new Promise((resolve, reject) => {
             navigator.geolocation.getCurrentPosition(resolve, reject, {
                 enableHighAccuracy: true,
-                timeout: 15000,
-                maximumAge: 0,
+                timeout: 7000,
+                maximumAge: 10000,
             });
         });
-    } catch (err) {
-        setTrackingUI(false);
-        let msg = 'Please enable location access in your browser settings to use Track Me.';
-        if (err.code === 1) msg = 'Location access denied. Please enable location in your browser settings.';
-        if (err.code === 3) msg = 'Location request timed out. Please check your connection and try again.';
-        showPermError(msg);
-        return;
+    } catch (err1) {
+        if (err1.code === 1) {
+            setTrackingUI(false);
+            showPermError('Location access denied. Please enable location permissions in your browser or app settings.');
+            return;
+        }
+        // Stage 2: Fallback to standard network/Wi-Fi location if high-accuracy times out
+        try {
+            initialPosition = await new Promise((resolve, reject) => {
+                navigator.geolocation.getCurrentPosition(resolve, reject, {
+                    enableHighAccuracy: false,
+                    timeout: 10000,
+                    maximumAge: 60000,
+                });
+            });
+        } catch (err2) {
+            if (err2.code === 1) {
+                setTrackingUI(false);
+                showPermError('Location access denied. Please enable location permissions in your browser or app settings.');
+                return;
+            }
+            console.warn('[TrackMe] Initial GPS fix delayed, proceeding with asynchronous location stream...');
+        }
     }
 
     // ── Start backend session (server creates ACTIVE record)

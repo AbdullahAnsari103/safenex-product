@@ -163,30 +163,47 @@
     }
 
     // ─── Start/Resume GPS watch and pings ─────────────────────────────────────
+    // ─── Start/Resume GPS watch and pings ─────────────────────────────────────
     function bgResumeTracking() {
         if (!navigator.geolocation) return;
 
-        // Re-acquire GPS watch on this page (watchPosition is per-context)
         if (_bgWatchId !== null) {
             navigator.geolocation.clearWatch(_bgWatchId);
         }
         _bgWatchId = navigator.geolocation.watchPosition(
             (pos) => { _bgPosition = pos; },
-            (err) => { console.warn('[TrackMe BG] GPS error:', err.code); },
-            { enableHighAccuracy: true, timeout: 30000, maximumAge: 5000 }
+            (err) => {
+                console.warn('[TrackMe BG] High-accuracy watch error:', err.code);
+                // Fallback watch: standard network accuracy
+                if (err.code === 2 || err.code === 3) {
+                    navigator.geolocation.getCurrentPosition(
+                        (pos) => { _bgPosition = pos; },
+                        null,
+                        { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+                    );
+                }
+            },
+            { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }
         );
 
-        // Get initial position then start pinging immediately
+        // Get initial position with high accuracy (7s timeout), fallback to network location
         navigator.geolocation.getCurrentPosition(
             (pos) => {
                 _bgPosition = pos;
                 bgSendPing().then(() => bgSchedulePing());
             },
             () => {
-                // No initial fix yet — still schedule pings for when position arrives
-                bgSchedulePing();
+                // Network fallback
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => {
+                        _bgPosition = pos;
+                        bgSendPing().then(() => bgSchedulePing());
+                    },
+                    () => { bgSchedulePing(); },
+                    { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+                );
             },
-            { enableHighAccuracy: true, timeout: 10000, maximumAge: 10000 }
+            { enableHighAccuracy: true, timeout: 7000, maximumAge: 10000 }
         );
     }
 
