@@ -15,7 +15,37 @@ const { createClient } = require('@libsql/client');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 
-let client = null;
+let rawClient = null;
+
+function getDBClient() {
+    if (!rawClient) {
+        const url = process.env.TURSO_DATABASE_URL;
+        const token = process.env.TURSO_AUTH_TOKEN;
+        if (url) {
+            rawClient = createClient({ 
+                url, 
+                authToken: token,
+                intMode: 'number'
+            });
+        } else {
+            const err = new Error('Turso Database is not configured. Please set TURSO_DATABASE_URL in Vercel Environment Variables.');
+            err.statusCode = 500;
+            throw err;
+        }
+    }
+    return rawClient;
+}
+
+const client = new Proxy({}, {
+    get(target, prop) {
+        const dbClient = getDBClient();
+        const value = dbClient[prop];
+        if (typeof value === 'function') {
+            return value.bind(dbClient);
+        }
+        return value;
+    }
+});
 
 /**
  * Initialize the Turso client and create tables if they don't exist.
@@ -23,20 +53,10 @@ let client = null;
  */
 async function initDB() {
     const url = process.env.TURSO_DATABASE_URL;
-    const token = process.env.TURSO_AUTH_TOKEN;
-
     if (!url) {
-        console.error('❌ TURSO_DATABASE_URL is not set in .env');
-        process.exit(1);
+        console.warn('⚠️ TURSO_DATABASE_URL is not set in environment variables. Database initialization skipped.');
+        return;
     }
-
-    // Create client with connection pooling and timeout settings
-    client = createClient({ 
-        url, 
-        authToken: token,
-        // Add connection settings to prevent timeouts
-        intMode: 'number'
-    });
 
     // Test connection
     try {
@@ -44,6 +64,10 @@ async function initDB() {
         console.log('✅ Turso DB connection established');
     } catch (error) {
         console.error('❌ Failed to connect to Turso DB:', error.message);
+        if (process.env.VERCEL) {
+            console.warn('⚠️ Skipping further DB retries on Vercel.');
+            return;
+        }
         console.log('⚠️ Retrying connection in 5 seconds...');
         await new Promise(resolve => setTimeout(resolve, 5000));
         try {
@@ -51,7 +75,7 @@ async function initDB() {
             console.log('✅ Turso DB connection established on retry');
         } catch (retryError) {
             console.error('❌ Failed to connect to Turso DB after retry:', retryError.message);
-            process.exit(1);
+            return;
         }
     }
 

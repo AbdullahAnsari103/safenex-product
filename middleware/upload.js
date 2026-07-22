@@ -1,16 +1,28 @@
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
-// Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, '..', 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
+// Determine temporary upload directory safely for read-only / serverless environments (like Vercel)
+function getUploadsDir() {
+    if (process.env.VERCEL) {
+        return os.tmpdir();
+    }
+    const localDir = path.join(__dirname, '..', 'uploads');
+    try {
+        if (!fs.existsSync(localDir)) {
+            fs.mkdirSync(localDir, { recursive: true });
+        }
+        return localDir;
+    } catch (err) {
+        console.warn('[Upload Middleware] Cannot write to local uploads directory, falling back to os.tmpdir():', err.message);
+        return os.tmpdir();
+    }
 }
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, uploadsDir);
+        cb(null, getUploadsDir());
     },
     filename: (req, file, cb) => {
         const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
