@@ -2,28 +2,39 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0A0F1C" />
     <title>Nexa AI — Emergency Assistant</title>
-    <link rel="stylesheet" href="sos-redesign.css?v=2.6" />
+    <link rel="icon" type="image/png" href="/logosaf.png">
+    <link rel="shortcut icon" href="/logosaf.png">
+    <link rel="apple-touch-icon" href="/logosaf.png">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="sos-redesign.css?v=3.0" />
 </head>
 <body>
     <!-- Main Container -->
     <div class="nexa-container" id="nexaContainer">
         <!-- Header -->
         <header class="nexa-header">
-            <div class="nexa-brand">
-                <div class="nexa-logo">
+            <div class="nexa-header-left">
+                <button class="nexa-back-btn" id="backBtn" aria-label="Back to dashboard" title="Back to Dashboard">
                     <svg viewBox="0 0 24 24" fill="none">
-                        <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z" fill="currentColor"/>
-                        <path d="M12 8v4l3 2" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
-                </div>
-                <div class="nexa-brand-info">
-                    <h1>Nexa AI</h1>
-                    <div class="nexa-status">
-                        <span class="nexa-status-dot"></span>
-                        <span>Monitoring Active</span>
+                </button>
+                <div class="nexa-brand">
+                    <div class="nexa-logo">
+                        <svg viewBox="0 0 24 24" fill="none">
+                            <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z" fill="currentColor"/>
+                            <path d="M12 8v4l3 2" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div class="nexa-brand-info">
+                        <h1>Nexa AI</h1>
+                        <div class="nexa-status">
+                            <span class="nexa-status-dot"></span>
+                            <span>Monitoring Active</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -222,10 +233,13 @@
             <div class="nexa-config-actions">
                 <button class="nexa-btn nexa-btn-secondary" id="configCancel">Cancel</button>
                 <button class="nexa-btn nexa-btn-primary" id="configSave">
-                    <svg viewBox="0 0 24 24" fill="none">
+                    <svg class="nexa-save-icon" viewBox="0 0 24 24" fill="none">
                         <path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
-                    Save Settings
+                    <span class="nexa-save-text">Save Settings</span>
+                    <svg class="nexa-save-spinner" viewBox="0 0 24 24" fill="none" style="display:none">
+                        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-dasharray="31.4" stroke-dashoffset="10" stroke-linecap="round"/>
+                    </svg>
                 </button>
             </div>
         </div>

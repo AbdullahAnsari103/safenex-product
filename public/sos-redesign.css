@@ -129,12 +129,45 @@ input, textarea {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 18px 24px;
+    padding: max(16px, env(safe-area-inset-top)) 24px 16px;
     background: rgba(17, 24, 39, 0.95);
     backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
     border-bottom: 1px solid var(--border-color);
     position: relative;
     z-index: 100;
+}
+
+.nexa-header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.nexa-back-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-md);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    transition: all 0.2s ease;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.nexa-back-btn:hover {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    transform: translateX(-2px);
+}
+
+.nexa-back-btn svg {
+    width: 20px;
+    height: 20px;
 }
 
 .nexa-brand {

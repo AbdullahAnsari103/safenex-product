@@ -129,6 +129,9 @@ function initChat() {
         input.style.height = Math.min(input.scrollHeight, 120) + 'px';
     });
 
+    document.getElementById('backBtn')?.addEventListener('click', () => {
+        window.location.href = '/dashboard';
+    });
     settingsBtn.addEventListener('click', openConfig);
     voiceBtn.addEventListener('click', toggleVoiceRecording);
 }
@@ -1192,32 +1195,37 @@ function prepareEmergencyMessage(location) {
 
 async function sendWhatsAppMessage(message) {
     try {
-        const contact = state.config.primaryContact.replace(/[^\d+]/g, '');
+        let contact = (state.config?.primaryContact || '').replace(/\D/g, '');
         
         if (!contact) {
             throw new Error('No emergency contact configured');
         }
 
-        const encodedMessage = encodeURIComponent(message);
-        
-        // Always try WhatsApp app first (works on both mobile and desktop if app is installed)
-        const appUrl = `whatsapp://send?phone=${contact}&text=${encodedMessage}`;
-        
-        console.log('[WhatsApp] Opening app:', appUrl);
+        // Add default country code 91 if 10 digits
+        if (contact.length === 10) {
+            contact = '91' + contact;
+        }
 
-        // Try to open WhatsApp app
-        window.location.href = appUrl;
+        const encodedMessage = encodeURIComponent(message);
+        const waUrl = `https://wa.me/${contact}?text=${encodedMessage}`;
         
-        showToast('Opening WhatsApp... Press Send to alert your contact', 4000);
-        
-        // Fallback to web version after 2 seconds if app didn't open
-        setTimeout(() => {
-            const webUrl = `https://web.whatsapp.com/send?phone=${contact}&text=${encodedMessage}`;
-            window.open(webUrl, '_blank');
-        }, 2000);
+        console.log('[WhatsApp] Dispatching link:', waUrl);
+        showToast('📲 Launching WhatsApp... Press Send to alert your contact', 4000);
+
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        const isCapacitor = !!window.Capacitor;
+
+        if (isMobile || isCapacitor) {
+            window.location.href = waUrl;
+        } else {
+            const win = window.open(waUrl, '_blank');
+            if (!win) {
+                window.location.href = waUrl;
+            }
+        }
     } catch (err) {
         console.error('[WhatsApp]', err);
-        showToast('Failed to open WhatsApp. Please check your settings.');
+        showToast('Failed to open WhatsApp. Please check your emergency contacts in settings.');
     }
 }
 
@@ -1264,16 +1272,33 @@ function closeConfig() {
 }
 
 async function saveConfig() {
-    const config = {
-        primaryContact: document.getElementById('primaryContact').value.trim(),
-        secondaryContact: document.getElementById('secondaryContact').value.trim(),
-        safeWords: state.config.safeWords || ['help', 'emergency', 'danger', 'sos'],
-    };
+    const primaryInput = document.getElementById('primaryContact');
+    const secondaryInput = document.getElementById('secondaryContact');
+    const saveBtn = document.getElementById('configSave');
+    const saveIcon = saveBtn?.querySelector('.nexa-save-icon');
+    const saveSpinner = saveBtn?.querySelector('.nexa-save-spinner');
+    const saveText = saveBtn?.querySelector('.nexa-save-text');
 
-    if (!config.primaryContact) {
-        showToast('Please enter a primary contact');
+    const primaryContact = primaryInput?.value.trim() || '';
+    const secondaryContact = secondaryInput?.value.trim() || '';
+
+    if (!primaryContact) {
+        showToast('⚠️ Primary emergency contact phone number is required');
+        primaryInput?.focus();
         return;
     }
+
+    const config = {
+        primaryContact,
+        secondaryContact,
+        safeWords: state.config?.safeWords || ['help', 'emergency', 'danger', 'sos'],
+    };
+
+    // UI Loading state
+    if (saveBtn) saveBtn.disabled = true;
+    if (saveIcon) saveIcon.style.display = 'none';
+    if (saveSpinner) saveSpinner.style.display = 'inline-block';
+    if (saveText) saveText.textContent = 'Saving...';
 
     try {
         const token = localStorage.getItem('snx_token');
@@ -1285,7 +1310,7 @@ async function saveConfig() {
             },
             body: JSON.stringify({
                 ...config,
-                messageTemplate: '', // Not user-editable
+                messageTemplate: '',
                 voiceActivationEnabled: false,
                 liveBeaconEnabled: false,
                 beaconUpdateInterval: 60,
@@ -1296,14 +1321,19 @@ async function saveConfig() {
 
         if (res.ok) {
             state.config = config;
-            showToast('Settings saved successfully');
+            showToast('✅ Emergency contacts saved successfully');
             closeConfig();
         } else {
-            showToast('Failed to save settings');
+            showToast('Failed to save settings. Please try again.');
         }
     } catch (err) {
         console.error('[Config Save]', err);
-        showToast('Failed to save settings');
+        showToast('Failed to save settings. Connection error.');
+    } finally {
+        if (saveBtn) saveBtn.disabled = false;
+        if (saveIcon) saveIcon.style.display = 'inline-block';
+        if (saveSpinner) saveSpinner.style.display = 'none';
+        if (saveText) saveText.textContent = 'Save Settings';
     }
 }
 
